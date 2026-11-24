@@ -9,7 +9,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, ValidationError
 
-from elbank.core.config import Settings
+from elbank.core.config import JwtSettings
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -40,18 +40,18 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bool(_pwd_context.verify(password, password_hash))
 
 
-def _ttl_for(token_type: TokenType, settings: Settings) -> timedelta:
+def _ttl_for(token_type: TokenType, settings: JwtSettings) -> timedelta:
     match token_type:
         case TokenType.ACCESS:
-            return timedelta(minutes=settings.jwt_ttl_access_minutes)
+            return timedelta(minutes=settings.ttl_access_minutes)
         case TokenType.REFRESH:
-            return timedelta(days=settings.jwt_ttl_refresh_days)
+            return timedelta(days=settings.ttl_refresh_days)
 
 
 def create_token(
     subject: str,
     token_type: TokenType,
-    settings: Settings,
+    settings: JwtSettings,
     extra_claims: dict[str, Any] | None = None,
 ) -> str:
     now = datetime.now(UTC)
@@ -65,18 +65,18 @@ def create_token(
     }
     token: str = jwt.encode(
         claims,
-        settings.jwt_secret.get_secret_value(),
-        algorithm=settings.jwt_algorithm,
+        settings.secret.get_secret_value(),
+        algorithm=settings.algorithm,
     )
     return token
 
 
-def decode_token(token: str, expected_type: TokenType, settings: Settings) -> TokenPayload:
+def decode_token(token: str, expected_type: TokenType, settings: JwtSettings) -> TokenPayload:
     try:
         raw = jwt.decode(
             token,
-            settings.jwt_secret.get_secret_value(),
-            algorithms=[settings.jwt_algorithm],
+            settings.secret.get_secret_value(),
+            algorithms=[settings.algorithm],
         )
         payload = TokenPayload.model_validate(raw)
     except (JWTError, ValidationError) as exc:

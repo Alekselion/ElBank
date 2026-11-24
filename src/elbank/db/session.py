@@ -9,15 +9,15 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from elbank.core.config import Settings
+from elbank.core.config import PostgresSettings
 
 
-def create_engine(settings: Settings) -> AsyncEngine:
+def create_engine(settings: PostgresSettings) -> AsyncEngine:
     return create_async_engine(
-        settings.database_url,
-        echo=settings.postgres_echo,
-        pool_size=settings.postgres_pool_size,
-        max_overflow=settings.postgres_max_overflow,
+        settings.dsn,
+        echo=settings.echo,
+        pool_size=settings.pool_size,
+        max_overflow=settings.max_overflow,
         pool_pre_ping=True,
     )
 

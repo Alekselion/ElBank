@@ -9,9 +9,9 @@ def main() -> None:
     settings = get_settings()
     uvicorn.run(
         "elbank.main:app",
-        host=settings.app_host,
-        port=settings.app_port,
-        reload=settings.app_env == "local",
+        host=settings.app.host,
+        port=settings.app.port,
+        reload=settings.app.env == "local",
         log_config=None,  # logging is configured by elbank.core.logging
         proxy_headers=True,
     )

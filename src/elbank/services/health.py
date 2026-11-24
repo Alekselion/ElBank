@@ -23,7 +23,7 @@ async def _run_probe(name: str, probe: Probe, probe_timeout: float) -> Dependenc
     except Exception as exc:  # noqa: BLE001 - any failure means "not ready"
         latency = (time.perf_counter() - started) * 1000
         error = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-        logger.warning("readiness_probe_failed", dependency=name, error=error)
+        logger.warning("readiness probe failed", dependency=name, error=error)
         return DependencyStatus(status="fail", latency_ms=round(latency, 2), error=error)
     latency = (time.perf_counter() - started) * 1000
     return DependencyStatus(status="ok", latency_ms=round(latency, 2))

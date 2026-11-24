@@ -12,7 +12,7 @@ from typing import Any
 from aiokafka import AIOKafkaProducer
 from aiokafka.structs import RecordMetadata
 
-from elbank.core.config import Settings
+from elbank.core.config import KafkaSettings
 
 
 def _serialize(value: Any) -> bytes:
@@ -20,7 +20,7 @@ def _serialize(value: Any) -> bytes:
 
 
 class KafkaProducer:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: KafkaSettings) -> None:
         self._settings = settings
         self._producer: AIOKafkaProducer | None = None
         self._lock = asyncio.Lock()
@@ -34,8 +34,8 @@ class KafkaProducer:
             if self._producer is not None:
                 return
             producer = AIOKafkaProducer(
-                bootstrap_servers=self._settings.kafka_servers,
-                client_id=self._settings.kafka_client_id,
+                bootstrap_servers=self._settings.servers,
+                client_id=self._settings.client_id,
                 value_serializer=_serialize,
                 key_serializer=lambda k: k.encode() if isinstance(k, str) else k,
                 acks="all",

@@ -16,7 +16,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # The DSN always comes from the environment (.env), never from alembic.ini.
-config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
+config.set_main_option("sqlalchemy.url", get_settings().postgres.dsn.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

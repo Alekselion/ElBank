@@ -1,67 +1,123 @@
-"""Structured logging: structlog on top of stdlib logging, shipped to Logstash.
+"""Structured JSON logging: structlog on top of stdlib logging, shipped to Logstash.
 
-Every record (from structlog *and* third-party stdlib loggers) goes through the
-same processor chain, is rendered to stdout (console or JSON) and, when enabled,
-is sent asynchronously to Logstash over TCP as JSON.
+Every record — from structlog loggers *and* third-party stdlib loggers (uvicorn,
+SQLAlchemy, ...) — goes through one processor chain and becomes a JSON object
+with the mandatory fields::
+
+    timestamp, level, logger, message, correlation_id, service, env
+
+plus any extra key/values passed to the logger. The same JSON is written to
+stdout and sent asynchronously to Logstash over TCP (one object per line).
+
+Logstash being unavailable never breaks or blocks the application: events are
+queued in memory, retried in the background and dropped after
+``LOGSTASH_EVENT_TTL_SECONDS``; the shipper's own errors go to stdout only.
 """
 
 import logging
-import logging.config
+from collections.abc import MutableMapping
 from typing import Any
 
 import structlog
-from logstash_async.formatter import LogstashFormatter
 from logstash_async.handler import AsynchronousLogstashHandler
 
 from elbank.core.config import Settings
 
-_SHARED_PROCESSORS: list[structlog.typing.Processor] = [
-    structlog.contextvars.merge_contextvars,
-    structlog.stdlib.add_logger_name,
-    structlog.stdlib.add_log_level,
-    structlog.stdlib.ExtraAdder(),
-    structlog.processors.TimeStamper(fmt="iso", utc=True),
-    structlog.processors.StackInfoRenderer(),
-]
+LOGSTASH_EVENT_TTL_SECONDS = 300
+
+_REQUIRED_KEYS = ("timestamp", "level", "logger", "message", "correlation_id", "service", "env")
+
+type EventDict = MutableMapping[str, Any]
 
 
-def _console_processors(settings: Settings) -> list[structlog.typing.Processor]:
-    if settings.log_json:
-        return [structlog.processors.dict_tracebacks, structlog.processors.JSONRenderer()]
-    return [structlog.dev.ConsoleRenderer(colors=settings.app_env == "local")]
+def _static_fields(settings: Settings) -> structlog.typing.Processor:
+    service, env = settings.app.name, settings.app.env
+
+    def add_static_fields(_: Any, __: str, event_dict: EventDict) -> EventDict:
+        event_dict["service"] = service
+        event_dict["env"] = env
+        event_dict.setdefault("correlation_id", None)
+        return event_dict
+
+    return add_static_fields
 
 
-def _build_logstash_handler(settings: Settings) -> logging.Handler:
+def _uppercase_level(_: Any, __: str, event_dict: EventDict) -> EventDict:
+    if isinstance(level := event_dict.get("level"), str):
+        event_dict["level"] = level.upper()
+    return event_dict
+
+
+def _required_keys_first(_: Any, __: str, event_dict: EventDict) -> EventDict:
+    ordered = {key: event_dict.pop(key, None) for key in _REQUIRED_KEYS}
+    ordered.update(event_dict)
+    return ordered
+
+
+def _pre_chain(settings: Settings) -> list[structlog.typing.Processor]:
+    """Enrichment shared by structlog loggers and foreign (stdlib) records."""
+    return [
+        structlog.contextvars.merge_contextvars,  # correlation_id, bound per request
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
+        _static_fields(settings),
+    ]
+
+
+def _json_formatter(settings: Settings) -> logging.Formatter:
+    return structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=[*_pre_chain(settings), structlog.stdlib.ExtraAdder()],
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            _uppercase_level,
+            structlog.processors.dict_tracebacks,
+            structlog.processors.EventRenamer("message"),
+            _required_keys_first,
+            structlog.processors.JSONRenderer(default=str),
+        ],
+    )
+
+
+def _console_formatter(settings: Settings) -> logging.Formatter:
+    return structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=[*_pre_chain(settings), structlog.stdlib.ExtraAdder()],
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.dev.ConsoleRenderer(colors=True),
+        ],
+    )
+
+
+def _build_logstash_handler(settings: Settings, formatter: logging.Formatter) -> logging.Handler:
     handler: logging.Handler = AsynchronousLogstashHandler(
-        host=settings.logstash_host,
-        port=settings.logstash_port,
+        host=settings.logstash.host,
+        port=settings.logstash.port,
         database_path=None,  # in-memory queue; no SQLite buffer file in the container
         transport="logstash_async.transport.TcpTransport",
+        event_ttl=LOGSTASH_EVENT_TTL_SECONDS,
     )
-    handler.setFormatter(
-        LogstashFormatter(
-            extra_prefix=None,
-            extra={"application": settings.app_name, "environment": settings.app_env},
-        )
-    )
+    # The handler appends "\n" itself, so the payload is exactly what json_lines expects.
+    handler.setFormatter(formatter)
     return handler
 
 
 def setup_logging(settings: Settings) -> None:
     """Configure stdlib logging and structlog. Safe to call more than once."""
-    console_formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=_SHARED_PROCESSORS,
-        processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            *_console_processors(settings),
-        ],
-    )
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(console_formatter)
+    json_formatter = _json_formatter(settings)
 
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        json_formatter if settings.log.json_format else _console_formatter(settings)
+    )
     handlers: list[logging.Handler] = [console_handler]
-    if settings.logstash_enabled:
-        handlers.append(_build_logstash_handler(settings))
+
+    logstash_error: Exception | None = None
+    if settings.logstash.enabled:
+        try:
+            handlers.append(_build_logstash_handler(settings, json_formatter))
+        except Exception as exc:  # noqa: BLE001 - logging to stdout must keep working
+            logstash_error = exc
 
     root = logging.getLogger()
     for existing in list(root.handlers):
@@ -69,7 +125,7 @@ def setup_logging(settings: Settings) -> None:
         existing.close()
     for handler in handlers:
         root.addHandler(handler)
-    root.setLevel(settings.log_level)
+    root.setLevel(settings.log.level)
 
     # Route uvicorn's loggers through the root handlers instead of their own.
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
@@ -90,19 +146,22 @@ def setup_logging(settings: Settings) -> None:
 
     structlog.configure(
         processors=[
-            structlog.contextvars.merge_contextvars,
+            *_pre_chain(settings),
             structlog.processors.StackInfoRenderer(),
-            # Hands the event dict to stdlib as ``msg`` + ``extra`` (+ ``exc_info``):
-            # ProcessorFormatter enriches and renders it for the console via the
-            # shared pre-chain, LogstashFormatter ships the extras as JSON fields.
-            structlog.stdlib.render_to_log_kwargs,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.make_filtering_bound_logger(
-            logging.getLevelNamesMapping()[settings.log_level]
+            logging.getLevelNamesMapping()[settings.log.level]
         ),
         cache_logger_on_first_use=True,
     )
+
+    if logstash_error is not None:
+        get_logger(__name__).warning(
+            "logstash handler disabled, logging to stdout only",
+            error=f"{type(logstash_error).__name__}: {logstash_error}",
+        )
 
 
 def get_logger(name: str | None = None, **initial_values: Any) -> structlog.stdlib.BoundLogger:

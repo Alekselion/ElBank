@@ -1,16 +1,21 @@
-"""Application settings loaded from environment variables and the ``.env`` file."""
+"""Application settings loaded from environment variables and the ``.env`` file.
+
+Settings are grouped into nested sections (``settings.postgres.host``, ...).
+Each section reads its own env prefix, so the variable names stay flat
+(``POSTGRES_HOST``, ``JWT_SECRET``, ...) — see ``.env.example``.
+"""
 
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, PostgresDsn, RedisDsn, SecretStr, computed_field
+from pydantic import Field, PostgresDsn, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 type Environment = Literal["local", "dev", "prod"]
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
-class Settings(BaseSettings):
+class _Section(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -18,67 +23,111 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # --- Application ---
-    app_name: str = "elbank"
-    app_env: Environment = "local"
-    app_host: str = "0.0.0.0"  # noqa: S104 - bind address inside a container
-    app_port: int = Field(default=8000, ge=1, le=65535)
-    app_debug: bool = False
-    log_level: LogLevel = "INFO"
-    log_json: bool = False
 
-    # --- PostgreSQL ---
-    postgres_host: str = "localhost"
-    postgres_port: int = Field(default=5432, ge=1, le=65535)
-    postgres_user: str
-    postgres_password: SecretStr
-    postgres_db: str
-    postgres_pool_size: int = Field(default=10, ge=1)
-    postgres_max_overflow: int = Field(default=20, ge=0)
-    postgres_echo: bool = False
+class AppSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="APP_")
 
-    # --- Redis ---
-    redis_url: RedisDsn
+    name: str = "elbank"
+    env: Environment = "local"
+    host: str = "0.0.0.0"  # noqa: S104 - bind address inside a container
+    port: int = Field(default=8000, ge=1, le=65535)
+    debug: bool = False
 
-    # --- Kafka ---
-    kafka_bootstrap_servers: str
-    kafka_client_id: str = "elbank"
 
-    # --- JWT ---
-    jwt_secret: SecretStr = Field(min_length=32)
-    jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
-    jwt_ttl_access_minutes: int = Field(default=15, ge=1)
-    jwt_ttl_refresh_days: int = Field(default=7, ge=1)
+class LogSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="LOG_")
 
-    # --- Logstash ---
-    logstash_enabled: bool = True
-    logstash_host: str = "localhost"
-    logstash_port: int = Field(default=5000, ge=1, le=65535)
+    level: LogLevel = "INFO"
+    # true: one JSON object per line on stdout; false: human-readable console (local dev).
+    # Logs shipped to Logstash are always JSON.
+    json_format: bool = Field(default=True, validation_alias="LOG_JSON")
 
-    # --- External services ---
-    wiremock_base_url: str = "http://localhost:8080"
-    elastic_url: str = "http://localhost:9200"
 
-    # --- Health checks ---
-    readiness_timeout_seconds: float = Field(default=2.0, gt=0)
+class PostgresSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="POSTGRES_")
 
-    @computed_field  # type: ignore[prop-decorator]
+    host: str = "localhost"
+    port: int = Field(default=5432, ge=1, le=65535)
+    user: str
+    password: SecretStr
+    db: str
+    pool_size: int = Field(default=10, ge=1)
+    max_overflow: int = Field(default=20, ge=0)
+    echo: bool = False
+
     @property
-    def database_url(self) -> str:
+    def dsn(self) -> str:
         """SQLAlchemy async DSN (``postgresql+asyncpg://``)."""
-        dsn = PostgresDsn.build(
-            scheme="postgresql+asyncpg",
-            username=self.postgres_user,
-            password=self.postgres_password.get_secret_value(),
-            host=self.postgres_host,
-            port=self.postgres_port,
-            path=self.postgres_db,
+        return str(
+            PostgresDsn.build(
+                scheme="postgresql+asyncpg",
+                username=self.user,
+                password=self.password.get_secret_value(),
+                host=self.host,
+                port=self.port,
+                path=self.db,
+            )
         )
-        return str(dsn)
+
+
+class RedisSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="REDIS_")
+
+    url: RedisDsn
+
+
+class KafkaSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="KAFKA_")
+
+    bootstrap_servers: str
+    client_id: str = "elbank"
 
     @property
-    def kafka_servers(self) -> list[str]:
-        return [s.strip() for s in self.kafka_bootstrap_servers.split(",") if s.strip()]
+    def servers(self) -> list[str]:
+        return [s.strip() for s in self.bootstrap_servers.split(",") if s.strip()]
+
+
+class JwtSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="JWT_")
+
+    secret: SecretStr = Field(min_length=32)
+    algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
+    ttl_access_minutes: int = Field(default=15, ge=1)
+    ttl_refresh_days: int = Field(default=7, ge=1)
+
+
+class LogstashSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="LOGSTASH_")
+
+    enabled: bool = True
+    host: str = "localhost"
+    port: int = Field(default=5000, ge=1, le=65535)
+
+
+class WiremockSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="WIREMOCK_")
+
+    base_url: str = "http://localhost:8081"
+
+
+class ElasticSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="ELASTIC_")
+
+    url: str = "http://localhost:9200"
+
+
+class Settings(_Section):
+    app: AppSettings = Field(default_factory=AppSettings)
+    log: LogSettings = Field(default_factory=LogSettings)
+    postgres: PostgresSettings = Field(default_factory=PostgresSettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
+    kafka: KafkaSettings = Field(default_factory=KafkaSettings)
+    jwt: JwtSettings = Field(default_factory=JwtSettings)
+    logstash: LogstashSettings = Field(default_factory=LogstashSettings)
+    wiremock: WiremockSettings = Field(default_factory=WiremockSettings)
+    elastic: ElasticSettings = Field(default_factory=ElasticSettings)
+
+    readiness_timeout_seconds: float = Field(default=2.0, gt=0)
 
 
 @lru_cache(maxsize=1)

@@ -2,6 +2,8 @@ name: elbank
 
 x-app-env: &app-env
   # Inside the compose network services are reached by name, not localhost.
+  APP_ENV: dev
+  LOG_JSON: "true"
   POSTGRES_HOST: postgres
   POSTGRES_PORT: 5432
   REDIS_URL: redis://redis:6379/0
@@ -10,11 +12,9 @@ x-app-env: &app-env
   LOGSTASH_PORT: 5000
   WIREMOCK_BASE_URL: http://wiremock:8080
   ELASTIC_URL: http://elasticsearch:9200
-  APP_ENV: dev
-  LOG_JSON: "true"
 
 services:
-  # ---------------------------------------------------------------- application
+  # ================================================================ application
   migrate:
     build: .
     image: elbank:latest
@@ -26,7 +26,7 @@ services:
         condition: service_healthy
     restart: "no"
 
-  app:
+  elbank-app:
     build: .
     image: elbank:latest
     env_file: .env
@@ -42,13 +42,19 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-      logstash:
-        condition: service_started
       wiremock:
-        condition: service_started
+        condition: service_healthy
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status != 200)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped
 
-  # ------------------------------------------------------------------- storage
+  # ==================================================================== storage
   postgres:
     image: postgres:17-alpine
     environment:
@@ -68,7 +74,7 @@ services:
 
   redis:
     image: redis:8-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
@@ -80,18 +86,20 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # --------------------------------------------------------------- messaging
+  # ================================================================== messaging
   kafka:
     image: apache/kafka:4.1.0
     hostname: kafka
     ports:
-      - "9094:9094"
+      - "${KAFKA_HOST_PORT:-29092}:29092"
     environment:
+      # KRaft: this single node is both broker and controller, no ZooKeeper.
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      # PLAINTEXT :9092 — inside the compose network; EXTERNAL :29092 — from the host.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_HOST_PORT:-29092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -110,18 +118,42 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # ----------------------------------------------------- external API mocks
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    ports:
+      - "${KAFKA_UI_HOST_PORT:-8080}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: elbank
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # ======================================================== external API mocks
   wiremock:
     image: wiremock/wiremock:3.13.1
     command: ["--global-response-templating", "--disable-banner"]
     ports:
-      - "8080:8080"
+      - "${WIREMOCK_HOST_PORT:-8081}:8080"
     volumes:
       - ./wiremock/mappings:/home/wiremock/mappings:ro
       - ./wiremock/__files:/home/wiremock/__files:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/__admin/health > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
-  # --------------------------------------------------------------------- ELK
+  # ======================================================================== ELK
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:${ELK_VERSION:-8.17.4}
     environment:
@@ -133,7 +165,7 @@ services:
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s > /dev/null"]
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' > /dev/null"]
       interval: 10s
       timeout: 10s
       retries: 20
@@ -145,13 +177,24 @@ services:
       ELASTIC_URL: http://elasticsearch:9200
       XPACK_MONITORING_ENABLED: "false"
       LS_JAVA_OPTS: -Xms256m -Xmx256m
+      # Don't lose events: buffer on disk while Elasticsearch is slow/unavailable,
+      # and keep documents Elasticsearch rejects (mapping errors) in the DLQ.
+      QUEUE_TYPE: persisted
+      DEAD_LETTER_QUEUE_ENABLE: "true"
     ports:
       - "5000:5000"
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ls_data:/usr/share/logstash/data
     depends_on:
       elasticsearch:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9600/_node/pipelines/main > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     restart: unless-stopped
 
   kibana:
@@ -163,10 +206,36 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     restart: unless-stopped
+
+  # One-shot: create the "elbank-logs-*" data view so logs are visible in Discover.
+  kibana-setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELK_VERSION:-8.17.4}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        curl -fsS -X POST http://kibana:5601/api/data_views/data_view \
+          -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+          -d '{"override": true, "data_view": {"id": "elbank-logs", "name": "ElBank logs", "title": "elbank-logs-*", "timeFieldName": "@timestamp"}}' > /dev/null
+        curl -fsS -X POST http://kibana:5601/api/data_views/default \
+          -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+          -d '{"data_view_id": "elbank-logs", "force": true}' > /dev/null
+        echo "Kibana data view elbank-logs-* is ready"
+    depends_on:
+      kibana:
+        condition: service_healthy
+    restart: "no"
 
 volumes:
   pg_data:
   redis_data:
   kafka_data:
   es_data:
+  ls_data:

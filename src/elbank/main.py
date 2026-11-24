@@ -8,6 +8,7 @@ from redis.asyncio import Redis
 
 from elbank import __version__
 from elbank.api import api_router
+from elbank.api.middleware import CorrelationIdMiddleware
 from elbank.core.config import Settings, get_settings
 from elbank.core.logging import get_logger, setup_logging
 from elbank.db.session import create_engine, create_session_factory
@@ -20,13 +21,13 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
-    engine = create_engine(settings)
-    redis = Redis.from_url(str(settings.redis_url), decode_responses=True)
-    kafka = KafkaProducer(settings)
+    engine = create_engine(settings.postgres)
+    redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
+    kafka = KafkaProducer(settings.kafka)
     try:
         await kafka.start()
     except Exception as exc:  # noqa: BLE001 - app must boot; /ready reports Kafka as down
-        logger.warning("kafka_start_deferred", error=str(exc) or type(exc).__name__)
+        logger.warning("kafka producer start deferred", error=str(exc) or type(exc).__name__)
 
     app.state.resources = Resources(
         engine=engine,
@@ -34,14 +35,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis=redis,
         kafka=kafka,
     )
-    logger.info("app_started", env=settings.app_env, version=__version__)
+    logger.info("application started", version=__version__)
     try:
         yield
     finally:
         await kafka.stop()
         await redis.aclose()
         await engine.dispose()
-        logger.info("app_stopped")
+        logger.info("application stopped")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -51,10 +52,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="ElBank",
         version=__version__,
-        debug=settings.app_debug,
+        debug=settings.app.debug,
         lifespan=lifespan,
     )
     app.state.settings = settings
+    app.add_middleware(CorrelationIdMiddleware)
     app.include_router(api_router)
     return app
 
