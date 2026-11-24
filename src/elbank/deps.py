@@ -5,7 +5,6 @@ application lifespan and stored on ``app.state``; dependencies expose them
 to route handlers with precise types.
 """
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, cast
 
@@ -14,7 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from elbank.core.config import Settings, get_settings
-from elbank.db.session import session_scope
+from elbank.db.session import get_session
 from elbank.kafka import KafkaProducer
 
 
@@ -34,11 +33,6 @@ ResourcesDep = Annotated[Resources, Depends(get_resources)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-async def get_db_session(resources: ResourcesDep) -> AsyncIterator[AsyncSession]:
-    async for session in session_scope(resources.session_factory):
-        yield session
-
-
 def get_redis(resources: ResourcesDep) -> Redis:
     return resources.redis
 
@@ -47,6 +41,6 @@ def get_kafka(resources: ResourcesDep) -> KafkaProducer:
     return resources.kafka
 
 
-DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
+DbSessionDep = Annotated[AsyncSession, Depends(get_session)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 KafkaDep = Annotated[KafkaProducer, Depends(get_kafka)]

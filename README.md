@@ -118,6 +118,17 @@ uv run alembic downgrade -1
 
 Новые модели импортируйте в `src/elbank/db/models/__init__.py`, иначе autogenerate их не увидит.
 
+В контейнере: `docker compose exec elbank-app uv run alembic upgrade head`
+(при `docker compose up` это делает сервис `migrate`).
+
+Соглашения по моделям:
+- `UUIDMixin` (`id`, генерируется и в Python, и `gen_random_uuid()` в БД),
+  `TimestampMixin` (`created_at`, `updated_at`), `CreatedAtMixin` — для append-only таблиц.
+- Enum'ы хранятся как `VARCHAR` + `CHECK` (`str_enum`), не нативные PG-типы.
+- Деньги — `Numeric(18, 2)` (`Decimal`), ставки — `Numeric(7, 4)` в процентах.
+- Связи объявлены с `lazy="raise"`: загружайте их явно (`selectinload`), неявного I/O нет.
+- `get_session` не коммитит сам: транзакцию завершает сервисный слой (`await session.commit()`).
+
 ## Качество кода
 
 ```bash
