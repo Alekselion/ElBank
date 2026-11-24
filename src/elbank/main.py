@@ -3,13 +3,16 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
 from elbank import __version__
 from elbank.api import api_router
 from elbank.api.middleware import CorrelationIdMiddleware
+from elbank.clients import create_http_client
 from elbank.core.config import Settings, get_settings
+from elbank.core.exceptions import AppError
 from elbank.core.logging import get_logger, setup_logging
 from elbank.db.session import create_engine, create_session_factory
 from elbank.deps import Resources
@@ -24,6 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_engine(settings.postgres)
     redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
     kafka = KafkaProducer(settings.kafka)
+    http = create_http_client(settings.wiremock.base_url, settings.wiremock.timeout_seconds)
     try:
         await kafka.start()
     except Exception as exc:  # noqa: BLE001 - app must boot; /ready reports Kafka as down
@@ -34,15 +38,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         session_factory=create_session_factory(engine),
         redis=redis,
         kafka=kafka,
+        http=http,
     )
     logger.info("application started", version=__version__)
     try:
         yield
     finally:
         await kafka.stop()
+        await http.aclose()
         await redis.aclose()
         await engine.dispose()
         logger.info("application stopped")
+
+
+async def app_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, AppError)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message, "code": exc.code},
+        headers=exc.headers,
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -57,6 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_exception_handler(AppError, app_error_handler)
     app.include_router(api_router)
     return app
 

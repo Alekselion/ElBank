@@ -1,0 +1,17 @@
+{
+  "name": "SMS gateway: timeout for the test number +79990000001 (delay exceeds client timeout)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/sms/send",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.phone == '+79990000001')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 10000,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": { "message_id": "{{randomValue type='UUID'}}", "status": "queued" }
+  }
+}

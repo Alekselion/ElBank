@@ -42,6 +42,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       wiremock:
         condition: service_healthy
       logstash:
@@ -117,6 +119,25 @@ services:
       retries: 12
       start_period: 15s
     restart: unless-stopped
+
+  # Creates domain topics up front (idempotent) so the first publish does not
+  # race topic auto-creation. Add new event types to TOPICS.
+  kafka-init:
+    image: apache/kafka:4.1.0
+    environment:
+      TOPICS: user.registered notification.send
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for topic in $${TOPICS}; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+            --create --if-not-exists --topic "$${topic}" --partitions 3 --replication-factor 1
+        done
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
 
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2

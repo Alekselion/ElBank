@@ -1,0 +1,19 @@
+{
+  "name": "SMS gateway: provider outage for the test number +79990000000",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/sms/send",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.phone == '+79990000000')]" }
+    ]
+  },
+  "response": {
+    "status": 503,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "error": "provider_unavailable",
+      "message": "SMS provider is temporarily unavailable"
+    }
+  }
+}

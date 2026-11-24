@@ -93,7 +93,26 @@ class JwtSettings(_Section):
     secret: SecretStr = Field(min_length=32)
     algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
     ttl_access_minutes: int = Field(default=15, ge=1)
-    ttl_refresh_days: int = Field(default=7, ge=1)
+    ttl_refresh_days: int = Field(default=30, ge=1)
+    # Short-lived proof that an OTP was verified (reset password, 2FA, login with 2FA).
+    ttl_otp_minutes: int = Field(default=5, ge=1)
+
+
+class OtpSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="OTP_")
+
+    ttl_seconds: int = Field(default=300, ge=30)
+    # Wrong codes allowed per issued OTP; the code is burned after that.
+    max_attempts: int = Field(default=5, ge=1)
+    # Minimal interval between two OTPs for the same phone and purpose (anti SMS-bombing).
+    resend_cooldown_seconds: int = Field(default=60, ge=0)
+
+
+class LoginRateLimitSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="LOGIN_RATE_LIMIT_")
+
+    max_attempts: int = Field(default=5, ge=1)
+    window_seconds: int = Field(default=900, ge=1)
 
 
 class LogstashSettings(_Section):
@@ -108,6 +127,7 @@ class WiremockSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="WIREMOCK_")
 
     base_url: str = "http://localhost:8081"
+    timeout_seconds: float = Field(default=5.0, gt=0)
 
 
 class ElasticSettings(_Section):
@@ -123,6 +143,8 @@ class Settings(_Section):
     redis: RedisSettings = Field(default_factory=RedisSettings)
     kafka: KafkaSettings = Field(default_factory=KafkaSettings)
     jwt: JwtSettings = Field(default_factory=JwtSettings)
+    otp: OtpSettings = Field(default_factory=OtpSettings)
+    login_rate_limit: LoginRateLimitSettings = Field(default_factory=LoginRateLimitSettings)
     logstash: LogstashSettings = Field(default_factory=LogstashSettings)
     wiremock: WiremockSettings = Field(default_factory=WiremockSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)

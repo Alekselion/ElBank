@@ -95,13 +95,36 @@ curl -s localhost:8000/ready    # readiness: PG + Redis + Kafka; 503, если �
 curl -s localhost:8081/ping     # WireMock
 ```
 
+## Аутентификация
+
+Эндпоинты — `/api/v1/auth/*` (см. Swagger). Ошибки: `{"detail": "...", "code": "..."}`.
+
+- **Токены.** Access — JWT на 15 мин, refresh — JWT на 30 дней; в БД хранится только sha256 refresh-токена.
+  `/refresh` ротирует пару; повторное использование уже отозванного refresh считается кражей
+  и отзывает все сессии пользователя. `/logout` и `/reset-password` отзывают все refresh-токены
+  и делают недействительными ранее выданные access-токены (метка в Redis).
+- **OTP.** `/send-otp` → SMS через WireMock (`POST /sms/send`) → `/verify-otp` возвращает
+  одноразовый `otp_token` (JWT, 5 мин, `otp_verified: true`), привязанный к телефону и `purpose`.
+  Цели: `login` (вход при включённой 2FA), `reset`, `phone_change`, `two_factor` (вкл./выкл. 2FA).
+  Код живёт 300 с, сгорает после 5 неверных попыток; повторная отправка — не чаще раза в 60 с.
+  Для незарегистрированного номера ответ тот же, но SMS не отправляется.
+- **2FA.** При `is_2fa_enabled` `/login` требует `otp_token` с `purpose=login`, иначе 401 `otp_required`.
+- **Rate limit.** Не более 5 попыток входа на телефон за 15 мин → 429 с `Retry-After`;
+  счётчик блокировок — Redis-ключ `metrics:user.login_blocked`, событие в логах `user.login_blocked`.
+- **Kafka.** Топики `user.registered`, `notification.send` (создаёт сервис `kafka-init`), формат
+  `{event_id, event_type, occurred_at, correlation_id, payload}`.
+
+Код из SMS при локальной разработке виден в журнале WireMock: `GET localhost:8081/__admin/requests`.
+Тестовые номера WireMock: `+79990000000` — SMS-шлюз отвечает 503, `+79990000001` — таймаут.
+
 ## Логи
 
 Все логи — JSON, по одному объекту на строку. Обязательные поля:
 `timestamp`, `level`, `logger`, `message`, `correlation_id`, `service`, `env`.
 
-- `correlation_id` берётся из заголовка `X-Correlation-ID` (или `X-Request-ID`), иначе генерируется;
-  возвращается в ответе в `X-Correlation-ID`. Вне HTTP-запроса — `null`.
+- `correlation_id` берётся из заголовка `X-Correlation-Id` (или `X-Request-ID`), иначе генерируется;
+  возвращается в ответе в `X-Correlation-Id`, передаётся во внешние HTTP-вызовы (WireMock)
+  и в Kafka (поле envelope и заголовок записи `correlation_id`). Вне HTTP-запроса — `null`.
 - Логи пишутся в stdout и асинхронно отправляются в Logstash (TCP 5000, `json_lines`) →
   Elasticsearch, индекс `elbank-logs-YYYY.MM.dd`. В Kibana: Discover → data view «ElBank logs».
 - Если Logstash недоступен, приложение работает как обычно: события ждут в памяти

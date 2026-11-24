@@ -1,0 +1,16 @@
+{
+  "name": "SMS gateway: malformed request",
+  "priority": 20,
+  "request": {
+    "method": "POST",
+    "url": "/sms/send"
+  },
+  "response": {
+    "status": 400,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "error": "invalid_request",
+      "message": "Body must be JSON with an E.164 'phone' and a 'text'"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "SMS gateway: send message (success)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/sms/send",
+    "headers": {
+      "Content-Type": { "contains": "application/json" }
+    },
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.phone =~ /^\\+[1-9][0-9]{7,14}$/)]" },
+      { "matchesJsonPath": "$.text" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "jsonBody": {
+      "message_id": "{{randomValue type='UUID'}}",
+      "status": "queued",
+      "phone": "{{jsonPath request.body '$.phone'}}",
+      "queued_at": "{{now}}"
+    }
+  }
+}

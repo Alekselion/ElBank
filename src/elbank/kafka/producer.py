@@ -7,6 +7,7 @@ each probe until the broker becomes available.
 
 import asyncio
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from aiokafka import AIOKafkaProducer
@@ -62,7 +63,17 @@ class KafkaProducer:
         if not await self._producer.client.force_metadata_update():
             raise ConnectionError("Kafka metadata update failed")
 
-    async def send(self, topic: str, value: Any, key: str | None = None) -> RecordMetadata:
+    async def send(
+        self,
+        topic: str,
+        value: Any,
+        key: str | None = None,
+        headers: Sequence[tuple[str, bytes]] | None = None,
+    ) -> RecordMetadata:
         if self._producer is None:
-            raise RuntimeError("Kafka producer is not started")
-        return await self._producer.send_and_wait(topic, value=value, key=key)
+            # The broker may have been down at startup; try to connect now.
+            await self.start()
+        assert self._producer is not None
+        return await self._producer.send_and_wait(
+            topic, value=value, key=key, headers=list(headers) if headers else None
+        )

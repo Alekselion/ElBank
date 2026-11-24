@@ -7,17 +7,20 @@ import structlog
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-CORRELATION_ID_HEADER = "X-Correlation-ID"
+from elbank.core.context import CORRELATION_ID_HEADER, correlation_id_var
+
 _FALLBACK_HEADERS = ("X-Request-ID",)
 # Accept only safe, bounded client-supplied ids (no log injection, no huge values).
 _VALID_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 
 class CorrelationIdMiddleware:
-    """Bind a correlation id to every log record emitted while handling a request.
+    """Propagate a correlation id through the whole request.
 
-    The id is taken from ``X-Correlation-ID`` (or ``X-Request-ID``) when the client
-    sends a valid one, otherwise generated. It is echoed in the response header.
+    The id is taken from ``X-Correlation-Id`` (or ``X-Request-ID``) when the client
+    sends a valid one, otherwise generated. It is stored in ``correlation_id_var``
+    (read by the Kafka producer and outgoing HTTP clients), bound to every log
+    record and echoed in the response header.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -35,8 +38,12 @@ class CorrelationIdMiddleware:
                 MutableHeaders(scope=message)[CORRELATION_ID_HEADER] = correlation_id
             await send(message)
 
-        with structlog.contextvars.bound_contextvars(correlation_id=correlation_id):
-            await self.app(scope, receive, send_with_header)
+        token = correlation_id_var.set(correlation_id)
+        try:
+            with structlog.contextvars.bound_contextvars(correlation_id=correlation_id):
+                await self.app(scope, receive, send_with_header)
+        finally:
+            correlation_id_var.reset(token)
 
     @staticmethod
     def _extract(headers: Headers) -> str | None:
