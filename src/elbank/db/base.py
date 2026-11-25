@@ -25,6 +25,9 @@ RATE = Numeric(7, 4)  # annual interest rate in percent, e.g. 12.5000
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+    # Fetch server-generated values (created_at, updated_at onupdate, ...) via RETURNING
+    # on INSERT *and* UPDATE, so they never need a lazy (sync) refresh in async code.
+    __mapper_args__ = {"eager_defaults": True}  # noqa: RUF012 - SQLAlchemy reads a plain dict
 
     type_annotation_map: ClassVar[dict[Any, Any]] = {
         uuid.UUID: Uuid(as_uuid=True),

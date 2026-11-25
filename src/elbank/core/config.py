@@ -6,6 +6,7 @@ Each section reads its own env prefix, so the variable names stay flat
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, PostgresDsn, RedisDsn, SecretStr
@@ -130,6 +131,23 @@ class WiremockSettings(_Section):
     timeout_seconds: float = Field(default=5.0, gt=0)
 
 
+class GosuslugiSettings(_Section):
+    """Passport check at Gosuslugi (served by WireMock under ``WIREMOCK_BASE_URL``)."""
+
+    model_config = SettingsConfigDict(env_prefix="GOSUSLUGI_")
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+    retries: int = Field(default=2, ge=0, le=5)  # extra attempts after the first one
+
+
+class KycSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="KYC_")
+
+    # Passport scans; /app/uploads (a named volume) in docker-compose.
+    uploads_dir: Path = Path("uploads")
+    max_upload_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
+
+
 class ElasticSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="ELASTIC_")
 
@@ -147,6 +165,8 @@ class Settings(_Section):
     login_rate_limit: LoginRateLimitSettings = Field(default_factory=LoginRateLimitSettings)
     logstash: LogstashSettings = Field(default_factory=LogstashSettings)
     wiremock: WiremockSettings = Field(default_factory=WiremockSettings)
+    gosuslugi: GosuslugiSettings = Field(default_factory=GosuslugiSettings)
+    kyc: KycSettings = Field(default_factory=KycSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)
 
     readiness_timeout_seconds: float = Field(default=2.0, gt=0)

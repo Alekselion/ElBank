@@ -1,0 +1,19 @@
+{
+  "name": "Gosuslugi: service unavailable for series 9999 (KYC goes to manual review)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/gosuslugi/verify-passport",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.series == '9999')]" }
+    ]
+  },
+  "response": {
+    "status": 503,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "error": "service_unavailable",
+      "message": "Gosuslugi is temporarily unavailable"
+    }
+  }
+}

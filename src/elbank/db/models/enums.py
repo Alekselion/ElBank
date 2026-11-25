@@ -18,7 +18,7 @@ class UserRole(StrEnum):
 
 class KycStatus(StrEnum):
     PENDING = "pending"
-    IN_REVIEW = "in_review"
+    MANUAL_REVIEW = "manual_review"  # external check failed/unavailable: a manager decides
     APPROVED = "approved"
     REJECTED = "rejected"
 

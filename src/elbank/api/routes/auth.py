@@ -1,10 +1,9 @@
 """Authentication endpoints (``/api/v1/auth``)."""
 
-from typing import Any
-
 from fastapi import APIRouter, status
 
 from elbank.api.deps import AuthServiceDep, CurrentUserDep, OtpServiceDep
+from elbank.api.openapi import Responses, error_response
 from elbank.deps import SettingsDep
 from elbank.schemas.auth import (
     LoginRequest,
@@ -20,27 +19,17 @@ from elbank.schemas.auth import (
     VerifyOtpRequest,
     VerifyOtpResponse,
 )
-from elbank.services.auth import TokenPair
+from elbank.services.sessions import TokenPair
 
 router = APIRouter(tags=["auth"])
 
 
-type Responses = dict[int | str, dict[str, Any]]
-
-
-def _error(description: str) -> dict[str, Any]:
-    return {
-        "description": description,
-        "content": {"application/json": {"example": {"detail": "message", "code": "machine_code"}}},
-    }
-
-
 _UNAUTHORIZED: Responses = {
-    status.HTTP_401_UNAUTHORIZED: _error("Missing, invalid or revoked token")
+    status.HTTP_401_UNAUTHORIZED: error_response("Missing, invalid or revoked token")
 }
 
 
-def _token_response(pair: TokenPair) -> TokenPairResponse:
+def token_pair_response(pair: TokenPair) -> TokenPairResponse:
     access_ttl = pair.access.expires_at - pair.access.issued_at
     refresh_ttl = pair.refresh.expires_at - pair.refresh.issued_at
     return TokenPairResponse(
@@ -55,7 +44,7 @@ def _token_response(pair: TokenPair) -> TokenPairResponse:
     "/register",
     status_code=status.HTTP_201_CREATED,
     summary="Register a new client",
-    responses={status.HTTP_409_CONFLICT: _error("Phone or email already registered")},
+    responses={status.HTTP_409_CONFLICT: error_response("Phone or email already registered")},
 )
 async def register(body: RegisterRequest, auth: AuthServiceDep) -> UserRead:
     user = await auth.register(body.phone, body.password, body.email)
@@ -66,20 +55,22 @@ async def register(body: RegisterRequest, auth: AuthServiceDep) -> UserRead:
     "/login",
     summary="Log in with phone and password",
     responses={
-        status.HTTP_401_UNAUTHORIZED: _error("Invalid credentials, or 2FA OTP token required"),
-        status.HTTP_403_FORBIDDEN: _error("User is blocked or deleted"),
-        status.HTTP_429_TOO_MANY_REQUESTS: _error("Too many login attempts"),
+        status.HTTP_401_UNAUTHORIZED: error_response(
+            "Invalid credentials, or 2FA OTP token required"
+        ),
+        status.HTTP_403_FORBIDDEN: error_response("User is blocked or deleted"),
+        status.HTTP_429_TOO_MANY_REQUESTS: error_response("Too many login attempts"),
     },
 )
 async def login(body: LoginRequest, auth: AuthServiceDep) -> TokenPairResponse:
     pair = await auth.login(body.phone, body.password, body.otp_token)
-    return _token_response(pair)
+    return token_pair_response(pair)
 
 
 @router.post("/refresh", summary="Rotate the token pair", responses=_UNAUTHORIZED)
 async def refresh(body: RefreshRequest, auth: AuthServiceDep) -> TokenPairResponse:
     pair = await auth.refresh(body.refresh_token)
-    return _token_response(pair)
+    return token_pair_response(pair)
 
 
 @router.post(
@@ -97,8 +88,8 @@ async def logout(user: CurrentUserDep, auth: AuthServiceDep) -> None:
     status_code=status.HTTP_202_ACCEPTED,
     summary="Send a one-time code by SMS",
     responses={
-        status.HTTP_429_TOO_MANY_REQUESTS: _error("Code was requested too recently"),
-        status.HTTP_503_SERVICE_UNAVAILABLE: _error("SMS gateway is unavailable"),
+        status.HTTP_429_TOO_MANY_REQUESTS: error_response("Code was requested too recently"),
+        status.HTTP_503_SERVICE_UNAVAILABLE: error_response("SMS gateway is unavailable"),
     },
 )
 async def send_otp(
@@ -129,7 +120,7 @@ async def verify_otp(body: VerifyOtpRequest, otp: OtpServiceDep) -> VerifyOtpRes
     "/reset-password",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Set a new password using an OTP token (purpose=reset)",
-    responses={status.HTTP_401_UNAUTHORIZED: _error("OTP token invalid or already used")},
+    responses={status.HTTP_401_UNAUTHORIZED: error_response("OTP token invalid or already used")},
 )
 async def reset_password(body: ResetPasswordRequest, auth: AuthServiceDep) -> None:
     await auth.reset_password(body.phone, body.otp_token, body.new_password)

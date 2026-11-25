@@ -13,12 +13,16 @@ from elbank.db.models import User, UserRole, UserStatus
 from elbank.deps import (
     DbSessionDep,
     EventPublisherDep,
+    GosuslugiClientDep,
     RedisDep,
     SettingsDep,
     SmsClientDep,
 )
-from elbank.services.auth import AuthService, access_revoked_before
+from elbank.services.auth import AuthService
+from elbank.services.kyc import KycService
 from elbank.services.otp import OtpService
+from elbank.services.profile import ProfileService
+from elbank.services.sessions import access_revoked_before
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /api/v1/auth/login")
 
@@ -92,3 +96,31 @@ def get_auth_service(
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+
+
+def get_profile_service(
+    session: DbSessionDep,
+    redis: RedisDep,
+    otp: OtpServiceDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> ProfileService:
+    return ProfileService(session, redis, otp, publisher, settings)
+
+
+ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
+
+
+def get_kyc_service(
+    session: DbSessionDep,
+    gosuslugi: GosuslugiClientDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> KycService:
+    return KycService(session, gosuslugi, publisher, settings.kyc)
+
+
+KycServiceDep = Annotated[KycService, Depends(get_kyc_service)]
+
+# Managers and admins: back-office endpoints.
+StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]

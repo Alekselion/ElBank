@@ -58,6 +58,9 @@ COPY --from=builder --chown=elbank:elbank /app/.venv /app/.venv
 COPY --from=builder --chown=elbank:elbank /app/pyproject.toml /app/uv.lock /app/alembic.ini ./
 COPY --from=builder --chown=elbank:elbank /app/alembic ./alembic
 
+# Mount point for the KYC uploads volume; a fresh named volume inherits this ownership.
+RUN install -d -o elbank -g elbank -m 0750 /app/uploads
+
 USER elbank
 
 EXPOSE 8000

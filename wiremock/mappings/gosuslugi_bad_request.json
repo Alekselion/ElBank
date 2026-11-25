@@ -1,0 +1,16 @@
+{
+  "name": "Gosuslugi: malformed request",
+  "priority": 20,
+  "request": {
+    "method": "POST",
+    "url": "/gosuslugi/verify-passport"
+  },
+  "response": {
+    "status": 400,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "error": "invalid_request",
+      "message": "Body must be JSON with 'series' (4 digits), 'number' (6 digits), 'birth_date' (YYYY-MM-DD)"
+    }
+  }
+}

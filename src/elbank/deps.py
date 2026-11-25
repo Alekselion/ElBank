@@ -13,7 +13,7 @@ from fastapi import Depends, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from elbank.clients import SmsClient
+from elbank.clients import GosuslugiClient, SmsClient
 from elbank.core.config import Settings, get_settings
 from elbank.db.session import get_session
 from elbank.kafka import EventPublisher, KafkaProducer
@@ -52,8 +52,13 @@ def get_sms_client(resources: ResourcesDep) -> SmsClient:
     return SmsClient(resources.http)
 
 
+def get_gosuslugi_client(resources: ResourcesDep, settings: SettingsDep) -> GosuslugiClient:
+    return GosuslugiClient(resources.http, settings.gosuslugi)
+
+
 DbSessionDep = Annotated[AsyncSession, Depends(get_session)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 KafkaDep = Annotated[KafkaProducer, Depends(get_kafka)]
 EventPublisherDep = Annotated[EventPublisher, Depends(get_event_publisher)]
 SmsClientDep = Annotated[SmsClient, Depends(get_sms_client)]
+GosuslugiClientDep = Annotated[GosuslugiClient, Depends(get_gosuslugi_client)]

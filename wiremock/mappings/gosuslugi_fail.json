@@ -1,0 +1,23 @@
+{
+  "name": "Gosuslugi: passport is invalid (series 0000 or number 000000)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/gosuslugi/verify-passport",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.series == '0000' || @.number == '000000')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "jsonBody": {
+      "valid": false,
+      "full_name": "",
+      "message": "Паспорт недействителен или не найден в реестре МВД"
+    }
+  }
+}

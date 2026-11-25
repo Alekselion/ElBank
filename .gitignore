@@ -21,3 +21,6 @@ wheels/
 
 # Other / misc
 scripts/
+
+# KYC uploads (local runs)
+uploads/

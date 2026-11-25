@@ -15,6 +15,7 @@ import hmac
 import secrets
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from redis.asyncio import Redis
@@ -61,21 +62,37 @@ def _used_token_key(jti: str) -> str:
     return f"otp:token_used:{jti}"
 
 
-# Atomic check-and-burn. Returns {status, attempts_left}:
-# 1 = code matched (and deleted), 0 = wrong code, -1 = no active code.
+# Atomic check-and-burn of one or more codes that must all be correct together
+# (e.g. old and new phone on phone change).
+# KEYS: otp keys; ARGV[1]: max attempts; ARGV[1 + i]: code hash for KEYS[i].
+# Returns {status, attempts_left}: 1 = all matched (codes burned), 0 = wrong code(s),
+# -1 = some code is missing/expired. A wrong guess counts against every code of
+# the set; when attempts run out, all of them are burned.
 _VERIFY_LUA = """
-local expected = redis.call('HGET', KEYS[1], 'code_hash')
-if not expected then
-    return {-1, 0}
+local all_match = true
+for i, key in ipairs(KEYS) do
+    local expected = redis.call('HGET', key, 'code_hash')
+    if not expected then
+        return {-1, 0}
+    end
+    if expected ~= ARGV[i + 1] then
+        all_match = false
+    end
 end
-if expected == ARGV[1] then
-    redis.call('DEL', KEYS[1])
+if all_match then
+    redis.call('DEL', unpack(KEYS))
     return {1, 0}
 end
-local attempts = redis.call('HINCRBY', KEYS[1], 'attempts', 1)
-local left = tonumber(ARGV[2]) - attempts
+local max_used = 0
+for _, key in ipairs(KEYS) do
+    local attempts = redis.call('HINCRBY', key, 'attempts', 1)
+    if attempts > max_used then
+        max_used = attempts
+    end
+end
+local left = tonumber(ARGV[1]) - max_used
 if left <= 0 then
-    redis.call('DEL', KEYS[1])
+    redis.call('DEL', unpack(KEYS))
     left = 0
 end
 return {0, left}
@@ -136,7 +153,7 @@ class OtpService:
             sms = await self._sms.send(phone, _SMS_TEXT[purpose].format(code=code))
         except SmsGatewayError as exc:
             # The user never got the code: drop it and let them retry immediately.
-            await self._redis.delete(key, _cooldown_key(phone, purpose))
+            await self.discard(phone, purpose)
             raise ExternalServiceError("Could not send SMS, try again later") from exc
 
         logger.info("otp sent", phone=mask_phone(phone), purpose=purpose.value)
@@ -154,23 +171,41 @@ class OtpService:
         )
 
     async def verify(self, phone: str, code: str, purpose: OtpPurpose) -> OtpVerification:
+        """Check a code; on success burn it and issue an OTP token."""
+        result = await self.check_codes([(phone, code)], purpose)
+        if not result.verified:
+            return result
+        token = create_otp_token(phone, purpose, self._settings.jwt)
+        return OtpVerification(verified=True, attempts_left=0, token=token)
+
+    async def check_codes(
+        self, codes: Sequence[tuple[str, str]], purpose: OtpPurpose
+    ) -> OtpVerification:
+        """Check ``(phone, code)`` pairs atomically: all are burned only if all match."""
         status, attempts_left = await self._verify_script(
-            keys=[_otp_key(phone, purpose)],
-            args=[_hash_code(phone, purpose, code), self._settings.otp.max_attempts],
+            keys=[_otp_key(phone, purpose) for phone, _ in codes],
+            args=[
+                self._settings.otp.max_attempts,
+                *(_hash_code(phone, purpose, code) for phone, code in codes),
+            ],
         )
+        phones = [mask_phone(phone) for phone, _ in codes]
         if int(status) == 1:
-            logger.info("otp verified", phone=mask_phone(phone), purpose=purpose.value)
-            token = create_otp_token(phone, purpose, self._settings.jwt)
-            return OtpVerification(verified=True, attempts_left=0, token=token)
+            logger.info("otp verified", phones=phones, purpose=purpose.value)
+            return OtpVerification(verified=True, attempts_left=0)
 
         logger.warning(
             "otp verification failed",
-            phone=mask_phone(phone),
+            phones=phones,
             purpose=purpose.value,
             reason="no_active_code" if int(status) == -1 else "wrong_code",
             attempts_left=int(attempts_left),
         )
         return OtpVerification(verified=False, attempts_left=int(attempts_left))
+
+    async def discard(self, phone: str, purpose: OtpPurpose) -> None:
+        """Drop an issued code and its resend cooldown (e.g. the flow was aborted)."""
+        await self._redis.delete(_otp_key(phone, purpose), _cooldown_key(phone, purpose))
 
     async def consume_token(self, token: str, phone: str, purpose: OtpPurpose) -> OtpTokenPayload:
         """Validate an OTP token for ``phone``/``purpose`` and mark it used (single use)."""

@@ -26,7 +26,11 @@ logger = get_logger(__name__)
 
 class EventType(StrEnum):
     USER_REGISTERED = "user.registered"
+    USER_DELETED = "user.deleted"
+    PROFILE_UPDATED = "profile.updated"
     NOTIFICATION_SEND = "notification.send"
+    KYC_REQUESTED = "kyc.requested"
+    KYC_DECIDED = "kyc.decided"
 
 
 class EventEnvelope(BaseModel):

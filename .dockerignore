@@ -11,3 +11,4 @@ wiremock
 logstash
 docker-compose.yml
 Dockerfile
+uploads/

@@ -105,17 +105,53 @@ curl -s localhost:8081/ping     # WireMock
   и делают недействительными ранее выданные access-токены (метка в Redis).
 - **OTP.** `/send-otp` → SMS через WireMock (`POST /sms/send`) → `/verify-otp` возвращает
   одноразовый `otp_token` (JWT, 5 мин, `otp_verified: true`), привязанный к телефону и `purpose`.
-  Цели: `login` (вход при включённой 2FA), `reset`, `phone_change`, `two_factor` (вкл./выкл. 2FA).
+  Цели: `login` (вход при включённой 2FA), `reset`, `two_factor` (вкл./выкл. 2FA);
+  коды `phone_change` выдаёт только `/users/me/change-phone/request`.
   Код живёт 300 с, сгорает после 5 неверных попыток; повторная отправка — не чаще раза в 60 с.
   Для незарегистрированного номера ответ тот же, но SMS не отправляется.
 - **2FA.** При `is_2fa_enabled` `/login` требует `otp_token` с `purpose=login`, иначе 401 `otp_required`.
 - **Rate limit.** Не более 5 попыток входа на телефон за 15 мин → 429 с `Retry-After`;
   счётчик блокировок — Redis-ключ `metrics:user.login_blocked`, событие в логах `user.login_blocked`.
-- **Kafka.** Топики `user.registered`, `notification.send` (создаёт сервис `kafka-init`), формат
-  `{event_id, event_type, occurred_at, correlation_id, payload}`.
+- **Kafka.** Формат `{event_id, event_type, occurred_at, correlation_id, payload}`; топик = `event_type`.
+  Топики `user.registered`, `user.deleted`, `profile.updated`, `notification.send`, `kyc.requested`,
+  `kyc.decided` создаёт сервис `kafka-init`.
 
 Код из SMS при локальной разработке виден в журнале WireMock: `GET localhost:8081/__admin/requests`.
 Тестовые номера WireMock: `+79990000000` — SMS-шлюз отвечает 503, `+79990000001` — таймаут.
+
+## Профиль
+
+`/api/v1/users/me`: `GET`, `PATCH` (full_name, email, address; `null` очищает full_name/address),
+`DELETE` (soft delete: `status=deleted`, все сессии отзываются, событие `user.deleted`).
+
+- `POST /me/change-password` — проверяет старый пароль, отзывает все сессии и возвращает новую пару токенов.
+- `POST /me/change-phone/request` `{new_phone}` → коды на старый и новый номер;
+  `POST /me/change-phone/confirm` `{old_code, new_code}` — оба кода проверяются атомарно.
+- `GET/PATCH /me/notification-settings` — каналы `email`, `sms`, `push`, `in_app` (JSONB, по умолчанию включены).
+
+Изменения профиля публикуют `profile.updated` с изменёнными полями.
+
+## KYC
+
+`POST /api/v1/kyc/requests` (multipart: `passport_series`, `passport_number`, `birth_date`, `file` — JPEG
+до 5 МБ). Скан сохраняется в `{KYC_UPLOADS_DIR}/{request_id}.jpg` (в compose — volume `kyc_uploads`
+в `/app/uploads`), затем паспорт проверяется в Госуслугах (`POST /gosuslugi/verify-passport`,
+таймаут 5 с, 2 повтора при таймауте/сетевой ошибке/5xx):
+
+| Ответ Госуслуг              | Статус заявки                     | Событие       |
+|-----------------------------|-----------------------------------|---------------|
+| `valid: true`               | `approved`, ФИО пишется в профиль | `kyc.decided` |
+| `valid: false`              | `rejected` + `reject_reason`      | `kyc.decided` |
+| недоступен / мусор в ответе | `manual_review`                   | —             |
+
+`kyc.requested` публикуется сразу после создания заявки. Одновременно может быть только одна
+открытая заявка (`pending`/`manual_review`); после `approved` новые не принимаются.
+
+Бэк-офис (роль `manager` или `admin`): `GET /api/v1/admin/kyc/requests?status=`,
+`GET .../{id}/file` (скан), `POST .../{id}/approve`, `POST .../{id}/reject` `{reason}`.
+
+Тестовые данные WireMock: серия `0000` или номер `000000` — паспорт недействителен,
+серия `9999` — Госуслуги отвечают 503 (заявка уходит в `manual_review`), остальное — валиден.
 
 ## Логи
 

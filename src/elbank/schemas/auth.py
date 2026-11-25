@@ -30,6 +30,15 @@ Password = Annotated[
     Field(min_length=8, max_length=BCRYPT_MAX_BYTES, examples=["S3cure-pass"]),
     AfterValidator(_check_password),
 ]
+
+
+def _public_otp_purpose(value: OtpPurpose) -> OtpPurpose:
+    if value is OtpPurpose.PHONE_CHANGE:
+        raise ValueError("phone_change codes are requested via /api/v1/users/me/change-phone")
+    return value
+
+
+PublicOtpPurpose = Annotated[OtpPurpose, AfterValidator(_public_otp_purpose)]
 OtpCode = Annotated[str, StringConstraints(pattern=r"^\d{6}$"), Field(examples=["123456"])]
 Email = Annotated[EmailStr, AfterValidator(str.lower)]
 
@@ -59,13 +68,13 @@ class RefreshRequest(_Request):
 
 class SendOtpRequest(_Request):
     phone: Phone
-    purpose: OtpPurpose
+    purpose: PublicOtpPurpose
 
 
 class VerifyOtpRequest(_Request):
     phone: Phone
     code: OtpCode
-    purpose: OtpPurpose
+    purpose: PublicOtpPurpose
 
 
 class ResetPasswordRequest(_Request):
@@ -84,6 +93,8 @@ class UserRead(BaseModel):
     id: uuid.UUID
     phone: str
     email: str | None
+    full_name: str | None
+    address: str | None
     status: UserStatus
     role: UserRole
     is_2fa_enabled: bool

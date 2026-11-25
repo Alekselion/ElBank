@@ -59,10 +59,52 @@ class UserInactiveError(AppError):
     default_message = "User is blocked or deleted"
 
 
+class InvalidPasswordError(AppError):
+    status_code = status.HTTP_400_BAD_REQUEST
+    code = "invalid_password"
+    default_message = "Current password is incorrect"
+
+
+class InvalidOtpCodeError(AppError):
+    status_code = status.HTTP_400_BAD_REQUEST
+    code = "invalid_otp_code"
+    default_message = "OTP code is invalid or expired"
+
+
+class NotFoundError(AppError):
+    status_code = status.HTTP_404_NOT_FOUND
+    code = "not_found"
+    default_message = "Resource not found"
+
+
 class ConflictError(AppError):
     status_code = status.HTTP_409_CONFLICT
     code = "conflict"
     default_message = "Resource already exists"
+
+
+class InvalidStateError(AppError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "invalid_state"
+    default_message = "Operation is not allowed in the current state"
+
+
+class UnprocessableError(AppError):
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "unprocessable"
+    default_message = "Request cannot be processed"
+
+
+class PayloadTooLargeError(AppError):
+    status_code = status.HTTP_413_CONTENT_TOO_LARGE
+    code = "payload_too_large"
+    default_message = "Uploaded file is too large"
+
+
+class UnsupportedMediaTypeError(AppError):
+    status_code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    code = "unsupported_media_type"
+    default_message = "Unsupported file type"
 
 
 class TooManyRequestsError(AppError):

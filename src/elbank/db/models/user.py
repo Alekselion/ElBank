@@ -2,9 +2,9 @@
 
 import uuid
 from datetime import date, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Text, false
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text, false, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from elbank.db.base import Base, CreatedAtMixin, TimestampMixin, UUIDMixin, str_enum
@@ -20,6 +20,12 @@ class User(UUIDMixin, TimestampMixin, Base):
     phone: Mapped[str] = mapped_column(String(20), unique=True)  # E.164, e.g. +79991234567
     email: Mapped[str | None] = mapped_column(String(255), unique=True)  # stored lower-cased
     password_hash: Mapped[str] = mapped_column(String(255))
+    full_name: Mapped[str | None] = mapped_column(String(255))
+    address: Mapped[str | None] = mapped_column(String(500))
+    # Per-channel switches, e.g. {"email": true, "sms": false}; missing keys mean defaults.
+    notification_settings: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default=text("'{}'::jsonb")
+    )
     status: Mapped[UserStatus] = mapped_column(
         str_enum(UserStatus, "user_status"), default=UserStatus.ACTIVE, server_default="active"
     )
@@ -46,7 +52,10 @@ class RefreshToken(UUIDMixin, CreatedAtMixin, Base):
 
 class KycRequest(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "kyc_requests"
-    __table_args__ = (Index(None, "user_id", "status"),)
+    __table_args__ = (
+        Index(None, "user_id", "status"),
+        Index(None, "status", "created_at"),  # manager queue
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     status: Mapped[KycStatus] = mapped_column(
@@ -57,3 +66,8 @@ class KycRequest(UUIDMixin, TimestampMixin, Base):
     birth_date: Mapped[date]
     external_ref: Mapped[str | None] = mapped_column(String(64), unique=True)  # KYC provider id
     reject_reason: Mapped[str | None] = mapped_column(Text)
+    # Set when a decision (approved/rejected) is made; NULL decided_by_id: automatic decision.
+    decided_at: Mapped[datetime | None]
+    decided_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
