@@ -1,0 +1,67 @@
+{
+  "mappings": [
+    {
+      "name": "Card processor: issue declined for the test holder phone +79990000005",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/card-processor/issue",
+        "bodyPatterns": [
+          { "matchesJsonPath": "$[?(@.holder_phone == '+79990000005')]" }
+        ]
+      },
+      "response": {
+        "status": 422,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+        },
+        "jsonBody": {
+          "status": "error",
+          "code": "ISSUE_DECLINED",
+          "message": "Выпуск карты отклонён процессингом"
+        }
+      }
+    },
+    {
+      "name": "Card processor: unavailable for the test holder phone +79990000006 (retried, then 503)",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/card-processor/issue",
+        "bodyPatterns": [
+          { "matchesJsonPath": "$[?(@.holder_phone == '+79990000006')]" }
+        ]
+      },
+      "response": {
+        "status": 503,
+        "headers": { "Content-Type": "application/json; charset=utf-8" },
+        "jsonBody": {
+          "status": "error",
+          "code": "PROCESSOR_UNAVAILABLE",
+          "message": "Процессинг временно недоступен"
+        }
+      }
+    },
+    {
+      "name": "Card processor: any other (malformed) request",
+      "priority": 100,
+      "request": {
+        "method": "ANY",
+        "urlPathPattern": "/card-processor/.*"
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+        },
+        "jsonBody": {
+          "status": "error",
+          "code": "INVALID_REQUEST",
+          "message": "Запрос не распознан процессингом"
+        }
+      }
+    }
+  ]
+}

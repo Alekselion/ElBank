@@ -61,17 +61,41 @@ class AccountLimit(UUIDMixin, TimestampMixin, Base):
 
 
 class Card(UUIDMixin, TimestampMixin, Base):
+    """Payment card. The full PAN is never stored: only its mask and a keyed hash.
+
+    ``pan_hash`` is HMAC-SHA256(``CARDS_PAN_HASH_KEY``, PAN) in hex; it identifies the
+    card at the card processor and lets the bank find a card by PAN without keeping it.
+    """
+
     __tablename__ = "cards"
+    __table_args__ = (
+        CheckConstraint(
+            "type <> 'plastic' OR delivery_address IS NOT NULL", name="plastic_has_address"
+        ),
+        CheckConstraint("reissued_from_id <> id", name="not_reissued_from_itself"),
+    )
 
     account_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("accounts.id", ondelete="RESTRICT"), index=True
     )
     pan_masked: Mapped[str] = mapped_column(String(19))  # e.g. 220070******1234; never the full PAN
+    pan_hash: Mapped[str] = mapped_column(String(64), unique=True)
     expiry: Mapped[date]  # last day of the expiry month
     status: Mapped[CardStatus] = mapped_column(
         str_enum(CardStatus, "card_status"), default=CardStatus.ACTIVE, server_default="active"
     )
     type: Mapped[CardType] = mapped_column(str_enum(CardType, "card_type"))
+    # {"daily": "100000.00", "monthly": "...", "per_transaction": "..."}; null = no limit
     limits: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default=text("'{}'::jsonb"))
+    # {"allow": ["5411", ...], "deny": ["7995", ...]}; empty allow = every MCC not denied
+    mcc_restrictions: Mapped[dict[str, Any]] = mapped_column(
+        default=lambda: {"allow": [], "deny": []},
+        server_default=text("""'{"allow": [], "deny": []}'::jsonb"""),
+    )
+    # Plastic cards only: {"postal_code", "city", "street", "house", "apartment"}
+    delivery_address: Mapped[dict[str, Any] | None]
+    reissued_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("cards.id", ondelete="RESTRICT"), unique=True
+    )
 
     account: Mapped[Account] = relationship(back_populates="cards", lazy="raise")

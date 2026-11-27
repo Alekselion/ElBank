@@ -113,6 +113,12 @@ class UnprocessableError(AppError):
     default_message = "Request cannot be processed"
 
 
+class CardProcessorRejectedError(AppError):
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "CARD_PROCESSOR_REJECTED"
+    default_message = "The card processor refused the request"
+
+
 class PayloadTooLargeError(AppError):
     status_code = status.HTTP_413_CONTENT_TOO_LARGE
     code = "payload_too_large"

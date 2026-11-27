@@ -1,0 +1,8 @@
+{
+  "status": "issued",
+  "pan": "220070{{randomValue length=10 type='NUMERIC'}}",
+  "expiry_month": {{now offset='4 years' format='M'}},
+  "expiry_year": {{now offset='4 years' format='yyyy'}},
+  "card_id": "{{jsonPath request.body '$.card_id'}}",
+  "card_type": "{{jsonPath request.body '$.card_type'}}"
+}

@@ -31,7 +31,7 @@ logstash/pipeline/ # пайплайн Logstash
 
 ```bash
 cp .env.example .env
-# Задайте POSTGRES_PASSWORD и JWT_SECRET (не короче 32 символов):
+# Задайте POSTGRES_PASSWORD, JWT_SECRET и CARDS_PAN_HASH_KEY (не короче 32 символов):
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
@@ -328,6 +328,42 @@ IDEMPOTENCY_KEY_REUSED`. Пока запрос обрабатывается, в 
 | `receipt`      | `0000000000`                           | `9999999999`                         |
 
 Ответы лежат в `wiremock/__files/providers/` (шаблоны Handlebars: квитанция собирается из запроса).
+
+## Карты
+
+`/api/v1/cards` — карты к своим активным счетам (не больше `CARDS_MAX_PER_ACCOUNT` активных и
+заблокированных на счёт).
+
+| Метод и путь                     | Назначение                                                        |
+|----------------------------------|-------------------------------------------------------------------|
+| `POST /`                         | виртуальная карта `{account_id, type: "virtual"}` → `card.issued` |
+| `POST /plastic`                  | пластиковая `{account_id, address: {postal_code, city, street, house, apartment}}` → `card.issued`; нужно `full_name` в профиле |
+| `GET /`                          | свои карты (все статусы)                                          |
+| `GET /{id}`                      | детали: лимиты, MCC-ограничения, адрес доставки                    |
+| `POST /{id}/block`               | `active → blocked`, тело необязательно: `{reason: lost/stolen/compromised/other}` → `card.blocked` |
+| `POST /{id}/unblock`             | `blocked → active` (счёт активен, срок не истёк) → `card.unblocked` |
+| `POST /{id}/reissue`             | новая карта того же типа с теми же лимитами/MCC/адресом, старая — `reissued` → `card.issued` |
+| `GET`/`PUT /{id}/limits`         | `{daily, monthly, per_transaction}` в валюте счёта, `null` — без лимита; `per_transaction ≤ daily ≤ monthly` |
+| `PUT /{id}/mcc-restrictions`     | `{allow: [...], deny: [...]}` — 4-значные MCC; пустой `allow` — разрешено всё, кроме `deny` |
+
+PAN приходит только от процессинга и в БД не попадает: хранятся маска (`220070******1234`) и
+`pan_hash` = HMAC-SHA256(`CARDS_PAN_HASH_KEY`, PAN). По хэшу карта адресуется в процессинге:
+`POST /card-processor/{pan_hash}/block|unblock`. Выпуск — `POST /card-processor/issue` с
+`Idempotency-Key: <card id>`; при перевыпуске передаётся `replaces_pan_hash` старой карты.
+Лимиты и MCC-ограничения хранятся в JSONB (`cards.limits`, `cards.mcc_restrictions`),
+начальные лимиты — `CARDS_DEFAULT_*`.
+
+Изменение статуса сначала уходит в процессинг и сохраняется только после его ответа.
+Ретраи: 5xx, таймаут, ошибка соединения — `CARD_PROCESSOR_RETRIES` повторов; отказ процессинга
+(4xx) → `422 CARD_PROCESSOR_REJECTED`, недоступность → `503`.
+
+Тестовые данные WireMock (телефон владельца карты):
+
+| Сценарий                         | Данные                     |
+|----------------------------------|----------------------------|
+| выпуск: успех                    | любой другой телефон       |
+| выпуск: отказ `ISSUE_DECLINED`   | `+79990000005` → `422`     |
+| выпуск: процессинг недоступен    | `+79990000006` → `503`     |
 
 ## Логи
 

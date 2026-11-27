@@ -1,0 +1,27 @@
+{
+  "name": "Card processor: card issued (any well-formed request, virtual or plastic)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/card-processor/issue",
+    "headers": {
+      "Content-Type": { "contains": "application/json" },
+      "Idempotency-Key": { "matches": "^[0-9a-f-]{36}$" }
+    },
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.card_id =~ /^[0-9a-f-]{36}$/)]" },
+      { "matchesJsonPath": "$[?(@.card_type in ['virtual', 'plastic'])]" },
+      { "matchesJsonPath": "$[?(@.account_number =~ /^[0-9]{20}$/)]" },
+      { "matchesJsonPath": "$[?(@.currency =~ /^[A-Z]{3}$/)]" },
+      { "matchesJsonPath": "$[?(@.holder_phone =~ /^\\+[0-9]{11,15}$/)]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "card_processor/issued.json"
+  }
+}

@@ -41,6 +41,9 @@ class EventType(StrEnum):
     TRANSFER_REVERSED = "transfer.reversed"
     PAYMENT_PROCESSED = "payment.processed"
     PAYMENT_FAILED = "payment.failed"
+    CARD_ISSUED = "card.issued"
+    CARD_BLOCKED = "card.blocked"
+    CARD_UNBLOCKED = "card.unblocked"
 
 
 class EventEnvelope(BaseModel):

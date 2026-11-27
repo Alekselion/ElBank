@@ -70,6 +70,7 @@ class CardStatus(StrEnum):
     BLOCKED = "blocked"
     EXPIRED = "expired"
     CLOSED = "closed"
+    REISSUED = "reissued"  # replaced by a new card (Card.reissued_from_id points here)
 
 
 class CardType(StrEnum):

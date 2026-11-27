@@ -170,6 +170,43 @@ class ProviderSettings(_Section):
     retries: int = Field(default=2, ge=0, le=5)
 
 
+class CardProcessorSettings(_Section):
+    """Card processor (``/card-processor/*`` on WireMock): issue, block, unblock."""
+
+    model_config = SettingsConfigDict(env_prefix="CARD_PROCESSOR_")
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+    # Extra attempts on 5xx, timeouts and connection errors (never on 4xx).
+    retries: int = Field(default=2, ge=0, le=5)
+
+
+class CardSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="CARDS_")
+
+    # HMAC key for cards.pan_hash. Changing it makes every stored hash unusable.
+    pan_hash_key: SecretStr = Field(min_length=32)
+    # Cards per account that are not reissued/closed/expired.
+    max_per_account: int = Field(default=5, ge=1)
+    # Limits assigned to a newly issued card (in the account currency).
+    default_daily_limit: Decimal = Field(default=Decimal("100000.00"), gt=0, decimal_places=2)
+    default_monthly_limit: Decimal = Field(default=Decimal("500000.00"), gt=0, decimal_places=2)
+    default_per_transaction_limit: Decimal = Field(
+        default=Decimal("50000.00"), gt=0, decimal_places=2
+    )
+
+    @model_validator(mode="after")
+    def _check_limits(self) -> Self:
+        if not (
+            self.default_per_transaction_limit
+            <= self.default_daily_limit
+            <= self.default_monthly_limit
+        ):
+            raise ValueError(
+                "CARDS_DEFAULT_*_LIMIT must satisfy per_transaction <= daily <= monthly"
+            )
+        return self
+
+
 class CbrSettings(_Section):
     """Bank of Russia exchange rates (``GET /cbr/rates`` on WireMock)."""
 
@@ -281,6 +318,8 @@ class Settings(_Section):
     sbp: SbpSettings = Field(default_factory=SbpSettings)
     cbr: CbrSettings = Field(default_factory=CbrSettings)
     providers: ProviderSettings = Field(default_factory=ProviderSettings)
+    card_processor: CardProcessorSettings = Field(default_factory=CardProcessorSettings)
+    cards: CardSettings = Field(default_factory=CardSettings)
     kyc: KycSettings = Field(default_factory=KycSettings)
     bank: BankSettings = Field(default_factory=BankSettings)
     accounts: AccountSettings = Field(default_factory=AccountSettings)

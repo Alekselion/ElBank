@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from elbank.clients import (
+    CardProcessorClient,
     CbrClient,
     GosuslugiClient,
     InterbankClient,
@@ -75,6 +76,12 @@ def get_cbr_client(resources: ResourcesDep, settings: SettingsDep) -> CbrClient:
     return CbrClient(resources.http, settings.cbr)
 
 
+def get_card_processor_client(
+    resources: ResourcesDep, settings: SettingsDep
+) -> CardProcessorClient:
+    return CardProcessorClient(resources.http, settings.card_processor)
+
+
 def get_provider_client(resources: ResourcesDep, settings: SettingsDep) -> ProviderClient:
     return ProviderClient(resources.http, settings.providers)
 
@@ -89,3 +96,4 @@ InterbankClientDep = Annotated[InterbankClient, Depends(get_interbank_client)]
 SbpClientDep = Annotated[SbpClient, Depends(get_sbp_client)]
 CbrClientDep = Annotated[CbrClient, Depends(get_cbr_client)]
 ProviderClientDep = Annotated[ProviderClient, Depends(get_provider_client)]
+CardProcessorClientDep = Annotated[CardProcessorClient, Depends(get_card_processor_client)]

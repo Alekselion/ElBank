@@ -184,6 +184,7 @@ services:
         statement.requested
         transfer.completed transfer.failed transfer.reversed
         payment.processed payment.failed
+        card.issued card.blocked card.unblocked
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

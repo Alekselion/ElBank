@@ -1,0 +1,53 @@
+{
+  "mappings": [
+    {
+      "name": "Card processor: card blocked",
+      "priority": 10,
+      "request": {
+        "method": "POST",
+        "urlPathPattern": "/card-processor/[0-9a-f]{64}/block",
+        "headers": { "Content-Type": { "contains": "application/json" } },
+        "bodyPatterns": [
+          { "matchesJsonPath": "$[?(@.card_id =~ /^[0-9a-f-]{36}$/)]" },
+          { "matchesJsonPath": "$[?(@.reason in ['lost', 'stolen', 'compromised', 'other'])]" }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+        },
+        "jsonBody": {
+          "status": "blocked",
+          "card_id": "{{jsonPath request.body '$.card_id'}}",
+          "blocked_at": "{{now}}"
+        }
+      }
+    },
+    {
+      "name": "Card processor: card unblocked",
+      "priority": 10,
+      "request": {
+        "method": "POST",
+        "urlPathPattern": "/card-processor/[0-9a-f]{64}/unblock",
+        "headers": { "Content-Type": { "contains": "application/json" } },
+        "bodyPatterns": [
+          { "matchesJsonPath": "$[?(@.card_id =~ /^[0-9a-f-]{36}$/)]" }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+        },
+        "jsonBody": {
+          "status": "active",
+          "card_id": "{{jsonPath request.body '$.card_id'}}",
+          "unblocked_at": "{{now}}"
+        }
+      }
+    }
+  ]
+}

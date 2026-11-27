@@ -11,6 +11,7 @@ from elbank.core.exceptions import AuthenticationError, PermissionDeniedError, U
 from elbank.core.security import InvalidTokenError, TokenType, decode_token
 from elbank.db.models import User, UserRole, UserStatus
 from elbank.deps import (
+    CardProcessorClientDep,
     CbrClientDep,
     DbSessionDep,
     EventPublisherDep,
@@ -25,6 +26,7 @@ from elbank.deps import (
 from elbank.services.account_cache import AccountListCache
 from elbank.services.accounts import AccountService
 from elbank.services.auth import AuthService
+from elbank.services.cards import CardService
 from elbank.services.conversion import ConversionService
 from elbank.services.external_transfers import ExternalTransferService
 from elbank.services.idempotency import IdempotencyGuard
@@ -287,6 +289,18 @@ def get_template_service(session: DbSessionDep) -> TemplateService:
 
 
 TemplateServiceDep = Annotated[TemplateService, Depends(get_template_service)]
+
+
+def get_card_service(
+    session: DbSessionDep,
+    processor: CardProcessorClientDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> CardService:
+    return CardService(session, processor, publisher, settings.cards)
+
+
+CardServiceDep = Annotated[CardService, Depends(get_card_service)]
 
 # Managers and admins: back-office endpoints.
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]
