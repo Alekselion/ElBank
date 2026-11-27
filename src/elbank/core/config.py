@@ -5,11 +5,12 @@ Each section reads its own env prefix, so the variable names stay flat
 (``POSTGRES_HOST``, ``JWT_SECRET``, ...) — see ``.env.example``.
 """
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, PostgresDsn, RedisDsn, SecretStr
+from pydantic import Field, PostgresDsn, RedisDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 type Environment = Literal["local", "dev", "prod"]
@@ -148,6 +149,48 @@ class KycSettings(_Section):
     max_upload_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
 
 
+class BankSettings(_Section):
+    """Requisites of the emulated bank itself (pseudo values, not a real bank)."""
+
+    model_config = SettingsConfigDict(env_prefix="BANK_")
+
+    name: str = "АО «ЭлБанк»"  # noqa: RUF001 - Cyrillic on purpose
+    bic: str = Field(default="044525999", pattern=r"^04\d{7}$")
+    inn: str = Field(default="7700000000", pattern=r"^\d{10}$")
+    kpp: str = Field(default="770001001", pattern=r"^\d{9}$")
+    swift: str = Field(default="ELBKRUMM", pattern=r"^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$")
+    # Positions 10-13 of every account number (bank branch code).
+    branch_code: str = Field(default="0001", pattern=r"^\d{4}$")
+
+
+class AccountSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="ACCOUNTS_")
+
+    list_cache_ttl_seconds: int = Field(default=30, ge=1)
+    # Limits assigned to a newly opened account (in the account currency).
+    default_daily_limit: Decimal = Field(default=Decimal("100000.00"), gt=0, decimal_places=2)
+    default_monthly_limit: Decimal = Field(default=Decimal("1000000.00"), gt=0, decimal_places=2)
+
+    @model_validator(mode="after")
+    def _check_limits(self) -> Self:
+        if self.default_monthly_limit < self.default_daily_limit:
+            raise ValueError(
+                "ACCOUNTS_DEFAULT_MONTHLY_LIMIT must be >= ACCOUNTS_DEFAULT_DAILY_LIMIT"
+            )
+        return self
+
+
+class StatementSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="STATEMENTS_")
+
+    # Generated CSV files; /app/uploads/statements in docker-compose (shared by app and worker).
+    dir: Path = Path("uploads/statements")
+    # How long a job (and its file) is available after the request.
+    job_ttl_seconds: int = Field(default=24 * 3600, ge=60)
+    max_period_days: int = Field(default=366, ge=1)
+    consumer_group: str = "elbank-statements"
+
+
 class ElasticSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="ELASTIC_")
 
@@ -167,6 +210,9 @@ class Settings(_Section):
     wiremock: WiremockSettings = Field(default_factory=WiremockSettings)
     gosuslugi: GosuslugiSettings = Field(default_factory=GosuslugiSettings)
     kyc: KycSettings = Field(default_factory=KycSettings)
+    bank: BankSettings = Field(default_factory=BankSettings)
+    accounts: AccountSettings = Field(default_factory=AccountSettings)
+    statements: StatementSettings = Field(default_factory=StatementSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)
 
     readiness_timeout_seconds: float = Field(default=2.0, gt=0)

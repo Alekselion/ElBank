@@ -19,6 +19,7 @@ src/elbank/
   services/        # бизнес-логика
   clients/         # клиенты внешних API (httpx, мокаются WireMock)
   kafka/           # продюсеры/консьюмеры
+  workers/         # фоновые процессы (Kafka-консьюмеры), напр. генерация выписок
 alembic/           # миграции
 wiremock/          # маппинги и файлы ответов WireMock
 logstash/pipeline/ # пайплайн Logstash
@@ -68,7 +69,8 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартует `elbank-app`.
+Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`
+и `statement-worker` (консьюмер `statement.requested`).
 Сервис `kibana-setup` создаёт в Kibana data view `elbank-logs-*` и завершается.
 
 Порты по умолчанию (переопределяются в `.env`):
@@ -152,6 +154,41 @@ curl -s localhost:8081/ping     # WireMock
 
 Тестовые данные WireMock: серия `0000` или номер `000000` — паспорт недействителен,
 серия `9999` — Госуслуги отвечают 503 (заявка уходит в `manual_review`), остальное — валиден.
+
+## Счета
+
+`/api/v1/accounts` — открыть счёт может только пользователь с одобренным KYC
+(иначе `403`, `code: KYC_REQUIRED`). Тип и валюта: `checking`/`savings` — только `RUB`,
+`foreign` — `USD`/`EUR`/`CNY`. Все денежные суммы в JSON — строки (`"1500.00"`).
+
+| Метод и путь                          | Назначение                                                  |
+|---------------------------------------|-------------------------------------------------------------|
+| `POST /`                              | открыть счёт `{type, currency}` → `account.opened`          |
+| `GET /`                               | свои счета (кэш Redis `accounts:{user_id}`, 30 с)            |
+| `GET /{id}`                           | карточка счёта (чужой — `404`)                              |
+| `GET /{id}/requisites`                | реквизиты: номер, БИК, корсчёт, ИНН/КПП банка, SWIFT, IBAN   |
+| `DELETE /{id}`                        | закрыть: `active`, баланс 0, нет незавершённых операций → `account.closed` |
+| `POST /{id}/block`, `/unblock`        | `active` ⇄ `frozen`, только `manager`/`admin`               |
+| `GET`/`PUT /{id}/limits`              | `daily_limit`/`monthly_limit` (по умолчанию из `ACCOUNTS_DEFAULT_*`) |
+| `GET /{id}/statement?from=&to=`       | заказать выписку CSV → `202` + `job_id`                     |
+| `GET /statements/{job_id}`            | статус задачи (`pending`/`processing`/`ready`/`failed`) и `download_url` |
+| `GET /statements/{job_id}/file`       | скачать CSV                                                 |
+
+Номер счёта (20 цифр) строится по правилам Банка России: балансовый счёт (`40817` текущий,
+`42301` до востребования), код валюты (`810` для рубля), контрольный ключ по БИК банка,
+код подразделения (`BANK_BRANCH_CODE`) и 7 случайных цифр. Корсчёт выводится из БИК тем же
+алгоритмом, IBAN — псевдо (`RU` + mod-97 + БИК + номер счёта). Реквизиты банка — `BANK_*`.
+
+Кэш списка сбрасывается после открытия, закрытия, блокировки и разблокировки счёта. Недоступность
+Redis не ломает `GET /` — ответ берётся из БД.
+
+Выписка: задача хранится в Redis (`statement_job:{job_id}`, TTL `STATEMENTS_JOB_TTL_SECONDS`),
+публикуется `statement.requested`. Воркер `elbank-statements-worker` (сервис `statement-worker`)
+пишет `{STATEMENTS_DIR}/{job_id}.csv` (в compose — `/app/uploads/statements`, общий volume с
+`elbank-app`) и раз в час удаляет файлы старше TTL. Период — целые дни UTC, не больше
+`STATEMENTS_MAX_PERIOD_DAYS`, `to` не в будущем. Если Kafka недоступна, задача не создаётся (`503`).
+
+Локально воркер запускается отдельно: `uv run elbank-statements-worker`.
 
 ## Логи
 

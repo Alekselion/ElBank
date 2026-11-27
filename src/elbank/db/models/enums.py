@@ -29,6 +29,15 @@ class AccountType(StrEnum):
     FOREIGN = "foreign"
 
 
+class Currency(StrEnum):
+    """Currencies an account can be opened in (stored as ISO 4217 alpha code)."""
+
+    RUB = "RUB"
+    USD = "USD"
+    EUR = "EUR"
+    CNY = "CNY"
+
+
 class AccountStatus(StrEnum):
     ACTIVE = "active"
     FROZEN = "frozen"

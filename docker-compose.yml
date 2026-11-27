@@ -13,6 +13,7 @@ x-app-env: &app-env
   WIREMOCK_BASE_URL: http://wiremock:8080
   ELASTIC_URL: http://elasticsearch:9200
   KYC_UPLOADS_DIR: /app/uploads
+  STATEMENTS_DIR: /app/uploads/statements
 
 services:
   # ================================================================ application
@@ -57,6 +58,32 @@ services:
       timeout: 3s
       retries: 5
       start_period: 15s
+    restart: unless-stopped
+
+  # Kafka consumer of statement.requested: writes CSV statements to the shared
+  # uploads volume, from where elbank-app serves them.
+  statement-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-statements-worker"]
+    volumes:
+      - kyc_uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port; the process exits (and restarts) on fatal errors
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # ==================================================================== storage
@@ -131,6 +158,8 @@ services:
       TOPICS: >-
         user.registered user.deleted profile.updated notification.send
         kyc.requested kyc.decided
+        account.opened account.closed account.blocked account.unblocked
+        statement.requested
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

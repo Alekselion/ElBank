@@ -18,11 +18,14 @@ from elbank.deps import (
     SettingsDep,
     SmsClientDep,
 )
+from elbank.services.account_cache import AccountListCache
+from elbank.services.accounts import AccountService
 from elbank.services.auth import AuthService
 from elbank.services.kyc import KycService
 from elbank.services.otp import OtpService
 from elbank.services.profile import ProfileService
 from elbank.services.sessions import access_revoked_before
+from elbank.services.statements import StatementJobStore, StatementService
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /api/v1/auth/login")
 
@@ -121,6 +124,29 @@ def get_kyc_service(
 
 
 KycServiceDep = Annotated[KycService, Depends(get_kyc_service)]
+
+
+def get_account_service(
+    session: DbSessionDep,
+    redis: RedisDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> AccountService:
+    cache = AccountListCache(redis, settings.accounts.list_cache_ttl_seconds)
+    return AccountService(session, cache, publisher, settings.bank, settings.accounts)
+
+
+AccountServiceDep = Annotated[AccountService, Depends(get_account_service)]
+
+
+def get_statement_service(
+    redis: RedisDep, publisher: EventPublisherDep, settings: SettingsDep
+) -> StatementService:
+    store = StatementJobStore(redis, settings.statements.job_ttl_seconds)
+    return StatementService(store, publisher, settings.statements)
+
+
+StatementServiceDep = Annotated[StatementService, Depends(get_statement_service)]
 
 # Managers and admins: back-office endpoints.
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]

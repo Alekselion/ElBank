@@ -53,6 +53,12 @@ class PermissionDeniedError(AppError):
     default_message = "Not enough permissions"
 
 
+class KycRequiredError(AppError):
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "KYC_REQUIRED"
+    default_message = "Identity verification (KYC) must be approved first"
+
+
 class UserInactiveError(AppError):
     status_code = status.HTTP_403_FORBIDDEN
     code = "user_inactive"

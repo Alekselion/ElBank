@@ -31,6 +31,11 @@ class EventType(StrEnum):
     NOTIFICATION_SEND = "notification.send"
     KYC_REQUESTED = "kyc.requested"
     KYC_DECIDED = "kyc.decided"
+    ACCOUNT_OPENED = "account.opened"
+    ACCOUNT_CLOSED = "account.closed"
+    ACCOUNT_BLOCKED = "account.blocked"
+    ACCOUNT_UNBLOCKED = "account.unblocked"
+    STATEMENT_REQUESTED = "statement.requested"
 
 
 class EventEnvelope(BaseModel):
