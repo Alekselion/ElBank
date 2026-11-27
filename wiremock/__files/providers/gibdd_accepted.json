@@ -1,0 +1,14 @@
+{
+  "status": "accepted",
+  "transaction_id": "GIBDD-{{randomValue length=12 type='NUMERIC'}}",
+  "message": "Платёж принят",
+  "receipt": {
+    "recipient": "УФК по г. Москве (ГУ МВД России по г. Москве)",
+    "kbk": "18811601123010001140",
+    "uin": "{{jsonPath request.body '$.payload.uin'}}",
+    "discount_applied": false,
+    "amount": "{{jsonPath request.body '$.amount'}}",
+    "payment_id": "{{jsonPath request.body '$.payment_id'}}",
+    "paid_at": "{{now timezone='Europe/Moscow'}}"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "status": "accepted",
+  "transaction_id": "RCP-{{randomValue length=12 type='NUMERIC'}}",
+  "message": "Платёж принят",
+  "receipt": {
+    "receipt_number": "{{jsonPath request.body '$.payload.receipt_number'}}",
+    "recipient": "АО «Мосэнергосбыт»",
+    "amount": "{{jsonPath request.body '$.amount'}}",
+    "payment_id": "{{jsonPath request.body '$.payment_id'}}",
+    "paid_at": "{{now timezone='Europe/Moscow'}}"
+  }
+}

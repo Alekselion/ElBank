@@ -78,11 +78,13 @@ class CardType(StrEnum):
 
 
 class PaymentProvider(StrEnum):
+    UTILITY = "utility"  # housing and utilities (ЖКУ)
     MOBILE = "mobile"
-    UTILITIES = "utilities"
     INTERNET = "internet"
-    TAXES = "taxes"
-    FINES = "fines"
+    TAX = "tax"  # Federal Tax Service (ФНС)
+    TRAFFIC_FINE = "traffic_fine"  # traffic police fines (ГИБДД)
+    QR = "qr"  # payment QR code, GOST R 56042-2014
+    RECEIPT = "receipt"  # paper receipt by its number
 
 
 class PaymentOrderStatus(StrEnum):

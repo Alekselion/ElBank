@@ -1,0 +1,44 @@
+{
+  "name": "Utilities (ЕИРЦ): payment accepted (any well-formed request)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/providers/utility/pay",
+    "headers": {
+      "Content-Type": {
+        "contains": "application/json"
+      },
+      "Idempotency-Key": {
+        "matches": "^[0-9a-f-]{36}$"
+      }
+    },
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$[?(@.payment_id =~ /^[0-9a-f-]{36}$/)]"
+      },
+      {
+        "matchesJsonPath": "$[?(@.payer_account =~ /^[0-9]{20}$/)]"
+      },
+      {
+        "matchesJsonPath": "$[?(@.amount =~ /^[0-9]+\\.[0-9]{2}$/)]"
+      },
+      {
+        "matchesJsonPath": "$.payload[?(@.personal_account =~ /^[0-9]{6,20}$/)]"
+      },
+      {
+        "matchesJsonPath": "$.payload[?(@.period =~ /^[0-9]{4}-[0-9]{2}$/)]"
+      },
+      {
+        "matchesJsonPath": "$.payload.service"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/utility_accepted.json"
+  }
+}

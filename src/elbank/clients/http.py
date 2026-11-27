@@ -1,5 +1,7 @@
 """Shared httpx client factory and retry policy for external services."""
 
+from collections.abc import Callable
+
 import httpx
 from tenacity import (
     AsyncRetrying,
@@ -43,8 +45,25 @@ def is_retryable(exc: BaseException) -> bool:
     )
 
 
-def retrying(retries: int, service: str) -> AsyncRetrying:
-    """Tenacity policy shared by external clients: ``retries`` extra attempts, short backoff."""
+def is_server_or_transport_error(exc: BaseException) -> bool:
+    """Any 5xx, timeout or connection error; never a 4xx.
+
+    Only for endpoints that deduplicate by ``Idempotency-Key``: after a timeout the
+    first attempt may have been processed.
+    """
+    if isinstance(exc, httpx.TransportError):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.is_server_error
+
+
+def retrying(
+    retries: int,
+    service: str,
+    *,
+    retry_if: Callable[[BaseException], bool] = is_retryable,
+) -> AsyncRetrying:
+    """Tenacity policy shared by external clients: ``retries`` extra attempts with an
+    exponential backoff (0.2 s, 0.4 s, ... up to 2 s) for errors matching ``retry_if``."""
 
     def log_retry(state: RetryCallState) -> None:
         exc = state.outcome.exception() if state.outcome else None
@@ -58,7 +77,7 @@ def retrying(retries: int, service: str) -> AsyncRetrying:
     return AsyncRetrying(
         stop=stop_after_attempt(retries + 1),
         wait=wait_exponential(multiplier=0.2, max=2),
-        retry=retry_if_exception(is_retryable),
+        retry=retry_if_exception(retry_if),
         before_sleep=log_retry,
         reraise=True,
     )

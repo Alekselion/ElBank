@@ -26,7 +26,7 @@ count in the ledger, so no compensating posting is needed.
 """
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -337,6 +337,38 @@ class ExternalTransferService:
         )
 
 
+async def lock_unconfirmed(
+    session: AsyncSession, types: Sequence[OperationType], settings: TransferSettings
+) -> list[Operation]:
+    """Lock (``SKIP LOCKED``) operations of ``types`` that must be failed now: unconfirmed
+    after a timeout for ``external_timeout_fail_after_seconds``, or stuck in
+    ``processing`` for ``external_stale_after_seconds``."""
+    now = datetime.now(UTC)
+    timed_out_before = now - timedelta(seconds=settings.external_timeout_fail_after_seconds)
+    stale_before = now - timedelta(seconds=settings.external_stale_after_seconds)
+    rows = await session.scalars(
+        select(Operation)
+        .where(
+            Operation.type.in_(types),
+            or_(
+                and_(
+                    Operation.status == OperationStatus.PENDING,
+                    Operation.error_code == TransferErrorCode.EXTERNAL_TIMEOUT,
+                    Operation.updated_at <= timed_out_before,
+                ),
+                and_(
+                    Operation.status == OperationStatus.PROCESSING,
+                    Operation.updated_at <= stale_before,
+                ),
+            ),
+        )
+        .order_by(Operation.updated_at)
+        .limit(settings.finalizer_batch_size)
+        .with_for_update(skip_locked=True)
+    )
+    return list(rows)
+
+
 class ExternalTimeoutResolver:
     """Fails unconfirmed external transfers (timed out / stuck) and refunds the money."""
 
@@ -353,34 +385,8 @@ class ExternalTimeoutResolver:
         self._settings = settings
 
     async def run_once(self) -> int:
-        now = datetime.now(UTC)
-        timed_out_before = now - timedelta(
-            seconds=self._settings.external_timeout_fail_after_seconds
-        )
-        stale_before = now - timedelta(seconds=self._settings.external_stale_after_seconds)
         async with self._session_factory() as session:
-            operations = list(
-                await session.scalars(
-                    select(Operation)
-                    .where(
-                        Operation.type.in_(_EXTERNAL_TYPES),
-                        or_(
-                            and_(
-                                Operation.status == OperationStatus.PENDING,
-                                Operation.error_code == TransferErrorCode.EXTERNAL_TIMEOUT,
-                                Operation.updated_at <= timed_out_before,
-                            ),
-                            and_(
-                                Operation.status == OperationStatus.PROCESSING,
-                                Operation.updated_at <= stale_before,
-                            ),
-                        ),
-                    )
-                    .order_by(Operation.updated_at)
-                    .limit(self._settings.finalizer_batch_size)
-                    .with_for_update(skip_locked=True)
-                )
-            )
+            operations = await lock_unconfirmed(session, _EXTERNAL_TYPES, self._settings)
             if not operations:
                 return 0
             ops = OperationService(session)

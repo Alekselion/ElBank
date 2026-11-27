@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "RECEIPT_EXPIRED",
+  "message": "Срок оплаты квитанции истёк"
+}

@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "PHONE_NOT_SERVED",
+  "message": "Номер не обслуживается оператором"
+}

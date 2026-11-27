@@ -160,6 +160,16 @@ class SbpSettings(_Section):
     retries: int = Field(default=2, ge=0, le=5)
 
 
+class ProviderSettings(_Section):
+    """Service providers (``POST /providers/{name}/pay`` on WireMock)."""
+
+    model_config = SettingsConfigDict(env_prefix="PROVIDERS_")
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+    # Extra attempts on 5xx, timeouts and connection errors (never on 4xx).
+    retries: int = Field(default=2, ge=0, le=5)
+
+
 class CbrSettings(_Section):
     """Bank of Russia exchange rates (``GET /cbr/rates`` on WireMock)."""
 
@@ -270,6 +280,7 @@ class Settings(_Section):
     interbank: InterbankSettings = Field(default_factory=InterbankSettings)
     sbp: SbpSettings = Field(default_factory=SbpSettings)
     cbr: CbrSettings = Field(default_factory=CbrSettings)
+    providers: ProviderSettings = Field(default_factory=ProviderSettings)
     kyc: KycSettings = Field(default_factory=KycSettings)
     bank: BankSettings = Field(default_factory=BankSettings)
     accounts: AccountSettings = Field(default_factory=AccountSettings)

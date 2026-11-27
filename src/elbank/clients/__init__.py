@@ -4,6 +4,7 @@ from elbank.clients.cbr import CbrClient, CbrError
 from elbank.clients.gosuslugi import GosuslugiClient, GosuslugiError, PassportVerification
 from elbank.clients.http import create_http_client
 from elbank.clients.interbank import InterbankClient
+from elbank.clients.providers import ProviderClient
 from elbank.clients.sbp import SbpClient
 from elbank.clients.sms import SmsClient, SmsGatewayError
 
@@ -14,6 +15,7 @@ __all__ = [
     "GosuslugiError",
     "InterbankClient",
     "PassportVerification",
+    "ProviderClient",
     "SbpClient",
     "SmsClient",
     "SmsGatewayError",

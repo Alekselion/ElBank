@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "ACCRUAL_ALREADY_PAID",
+  "message": "Начисление уже оплачено"
+}

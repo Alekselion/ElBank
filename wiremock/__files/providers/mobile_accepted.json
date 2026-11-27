@@ -1,0 +1,13 @@
+{
+  "status": "accepted",
+  "transaction_id": "MOB-{{randomValue length=12 type='NUMERIC'}}",
+  "message": "Платёж принят",
+  "receipt": {
+    "operator": "ПАО «МТС»",
+    "phone": "{{jsonPath request.body '$.payload.phone'}}",
+    "credited": "{{jsonPath request.body '$.amount'}}",
+    "amount": "{{jsonPath request.body '$.amount'}}",
+    "payment_id": "{{jsonPath request.body '$.payment_id'}}",
+    "paid_at": "{{now timezone='Europe/Moscow'}}"
+  }
+}

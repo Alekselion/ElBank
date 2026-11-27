@@ -70,7 +70,8 @@ docker compose ps
 ```
 
 Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`,
-`statement-worker` (консьюмер `statement.requested`) и `transfers-worker` (завершение переводов).
+`statement-worker` (консьюмер `statement.requested`) и `transfers-worker` (завершение переводов,
+разбор таймаутов внешних переводов и платежей).
 Сервис `kibana-setup` создаёт в Kibana data view `elbank-logs-*` и завершается.
 
 Порты по умолчанию (переопределяются в `.env`):
@@ -274,6 +275,59 @@ IDEMPOTENCY_KEY_REUSED`. Пока запрос обрабатывается, в 
 | СБП: принят                 | любой телефон `+7XXXXXXXXXX`                                 |
 | СБП: таймаут (15 с)         | `+79990000002`                                               |
 | курсы ЦБ                    | `GET /cbr/rates`: USD, EUR, CNY и др., дата — сегодня        |
+
+## Оплата услуг
+
+`/api/v1/payments`:
+
+| Метод и путь                    | Назначение                                                          |
+|---------------------------------|---------------------------------------------------------------------|
+| `POST /`                        | `{account_id, provider, amount, payload, idempotency_key}`          |
+| `GET /{id}`                     | статус платежа (`created → sent → completed / failed`)              |
+| `GET /providers`                | справочник провайдеров: лимиты суммы и JSON-схема `payload`         |
+| `GET/POST /templates`, `GET/PUT/DELETE /templates/{id}` | шаблоны: `{name, provider, payload, amount, recipient_account, description}` |
+
+Провайдеры и `payload`:
+
+| provider       | Шлюз (WireMock)               | payload                                        |
+|----------------|-------------------------------|------------------------------------------------|
+| `utility`      | `/providers/utility/pay`      | `personal_account`, `period` (YYYY-MM), `service` |
+| `mobile`       | `/providers/mobile/pay`       | `phone` (+7XXXXXXXXXX)                         |
+| `internet`     | `/providers/internet/pay`     | `contract_number`                              |
+| `tax`          | `/providers/fns/pay`          | `inn` (12 цифр), `uin` (20/25 цифр)            |
+| `traffic_fine` | `/providers/gibdd/pay`        | `uin` (начинается с 188)                       |
+| `qr`           | `/providers/qr/pay`           | `qr` — строка ГОСТ Р 56042 (`ST0001…`)         |
+| `receipt`      | `/providers/receipt/pay`      | `receipt_number`                               |
+
+Платёж — это операция `payment` (списание; её статус и `error_code` главные) плюс `PaymentOrder`
+(провайдер, payload, ответ провайдера с квитанцией в `provider_response`). Только с рублёвых счетов,
+без комиссии, с проверкой статуса, баланса, лимитов и диапазона суммы провайдера. Схема как у внешних
+переводов: списание и `processing` → вызов провайдера → результат:
+
+| Ответ провайдера          | Платёж / операция                                  | Событие             |
+|---------------------------|----------------------------------------------------|---------------------|
+| 2xx `accepted`            | `completed`, `external_id` = `transaction_id`      | `payment.processed` |
+| 4xx `error`               | `failed`, `EXTERNAL_REJECTED`, деньги возвращаются | `payment.failed`    |
+| 5xx / мусор               | `failed`, `EXTERNAL_UNAVAILABLE`, возврат          | `payment.failed`    |
+| таймаут                   | `sent` / `pending`, `EXTERNAL_TIMEOUT`             | через ~5 с воркер: `failed`, возврат, `payment.failed` |
+
+Ретраи (tenacity): 5xx, таймаут и ошибка соединения — 2 повтора с экспоненциальной задержкой
+(`PROVIDERS_RETRIES`, таймаут попытки `PROVIDERS_TIMEOUT_SECONDS`), 4xx — без повторов. Каждый запрос
+несёт `Idempotency-Key: <payment id>`, поэтому повтор после таймаута не спишет деньги дважды.
+
+Тестовые данные WireMock: остальные значения — успех.
+
+| provider       | Отказ                                  | Таймаут (8 с)                        |
+|----------------|----------------------------------------|--------------------------------------|
+| `utility`      | `personal_account=000000` (404)        | `personal_account=999999`            |
+| `mobile`       | `+79990000003`                         | `+79990000004`                       |
+| `internet`     | `INET-000000`                          | `INET-999999`                        |
+| `tax`          | `uin=00000000000000000000`             | `uin=99999999999999999999`           |
+| `traffic_fine` | `uin=18800000000000000000` (404)       | `uin=18899999999999999999`           |
+| `qr`           | `PersonalAcc=00000000000000000000`     | `PersonalAcc=99999999999999999999`   |
+| `receipt`      | `0000000000`                           | `9999999999`                         |
+
+Ответы лежат в `wiremock/__files/providers/` (шаблоны Handlebars: квитанция собирается из запроса).
 
 ## Логи
 

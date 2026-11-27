@@ -1,0 +1,11 @@
+{
+  "status": "accepted",
+  "transaction_id": "QR-{{randomValue length=12 type='NUMERIC'}}",
+  "message": "Платёж принят",
+  "receipt": {
+    "qr": "{{jsonPath request.body '$.payload.qr'}}",
+    "amount": "{{jsonPath request.body '$.amount'}}",
+    "payment_id": "{{jsonPath request.body '$.payment_id'}}",
+    "paid_at": "{{now timezone='Europe/Moscow'}}"
+  }
+}

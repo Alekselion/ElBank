@@ -183,6 +183,7 @@ services:
         account.opened account.closed account.blocked account.unblocked
         statement.requested
         transfer.completed transfer.failed transfer.reversed
+        payment.processed payment.failed
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

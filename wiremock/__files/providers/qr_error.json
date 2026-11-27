@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "PAYEE_NOT_FOUND",
+  "message": "Получатель по реквизитам QR-кода не найден"
+}

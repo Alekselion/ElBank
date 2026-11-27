@@ -1,0 +1,21 @@
+{
+  "name": "Payment by receipt number: refused with RECEIPT_EXPIRED",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/receipt/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.receipt_number == '0000000000')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/receipt_error.json"
+  }
+}

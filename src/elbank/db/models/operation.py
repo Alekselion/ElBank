@@ -70,15 +70,27 @@ class Operation(UUIDMixin, TimestampMixin, Base):
 
 
 class TransferTemplate(UUIDMixin, TimestampMixin, Base):
+    """Saved payment details: a provider payment (provider + payload) or a transfer."""
+
     __tablename__ = "transfer_templates"
     __table_args__ = (
         UniqueConstraint("user_id", "name"),
         CheckConstraint("amount IS NULL OR amount > 0", name="amount_positive"),
+        CheckConstraint(
+            "provider IS NOT NULL OR recipient_account IS NOT NULL", name="has_recipient"
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(100))
-    recipient_account: Mapped[str] = mapped_column(String(34))
+    provider: Mapped[PaymentProvider | None] = mapped_column(
+        str_enum(PaymentProvider, "payment_provider")
+    )
+    # Provider-specific details (personal account, phone, UIN, ...), see the providers catalog.
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default=text("'{}'::jsonb")
+    )
+    recipient_account: Mapped[str | None] = mapped_column(String(34))
     amount: Mapped[Decimal | None]  # NULL: amount is entered on each use
     description: Mapped[str | None] = mapped_column(String(255))
 
@@ -101,4 +113,10 @@ class PaymentOrder(UUIDMixin, TimestampMixin, Base):
         default=PaymentOrderStatus.CREATED,
         server_default="created",
     )
+    # The debit posting of the payment (type=payment); its status/error_code are the truth.
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("operations.id", ondelete="RESTRICT"), unique=True
+    )
     external_id: Mapped[str | None] = mapped_column(String(64))  # provider's transaction id
+    # Last answer of the provider (receipt or error), as received.
+    provider_response: Mapped[dict[str, Any] | None]

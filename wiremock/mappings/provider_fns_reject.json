@@ -1,0 +1,21 @@
+{
+  "name": "Federal Tax Service: refused with ACCRUAL_ALREADY_PAID",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/fns/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.uin == '00000000000000000000')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/fns_error.json"
+  }
+}

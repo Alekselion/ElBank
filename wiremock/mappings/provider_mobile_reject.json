@@ -1,0 +1,21 @@
+{
+  "name": "Mobile operator: refused with PHONE_NOT_SERVED",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/mobile/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.phone == '+79990000003')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/mobile_error.json"
+  }
+}

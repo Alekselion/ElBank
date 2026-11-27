@@ -1,0 +1,21 @@
+{
+  "name": "Internet provider: refused with CONTRACT_TERMINATED",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/internet/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.contract_number == 'INET-000000')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/internet_error.json"
+  }
+}

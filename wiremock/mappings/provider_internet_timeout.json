@@ -1,0 +1,22 @@
+{
+  "name": "Internet provider: no answer in time (delay exceeds PROVIDERS_TIMEOUT_SECONDS)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/internet/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.contract_number == 'INET-999999')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 8000,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/internet_accepted.json"
+  }
+}

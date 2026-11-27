@@ -1,0 +1,22 @@
+{
+  "name": "Utilities (ЕИРЦ): no answer in time (delay exceeds PROVIDERS_TIMEOUT_SECONDS)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/utility/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.personal_account == '999999')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 8000,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/utility_accepted.json"
+  }
+}

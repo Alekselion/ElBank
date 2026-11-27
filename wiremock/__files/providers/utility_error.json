@@ -1,0 +1,5 @@
+{
+  "status": "error",
+  "code": "ACCOUNT_NOT_FOUND",
+  "message": "Лицевой счёт не найден"
+}

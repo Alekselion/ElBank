@@ -1,0 +1,22 @@
+{
+  "name": "QR code payment: no answer in time (delay exceeds PROVIDERS_TIMEOUT_SECONDS)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/qr/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.qr =~ /.*PersonalAcc=99999999999999999999.*/)]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 8000,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/qr_accepted.json"
+  }
+}

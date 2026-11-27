@@ -16,6 +16,7 @@ from elbank.deps import (
     EventPublisherDep,
     GosuslugiClientDep,
     InterbankClientDep,
+    ProviderClientDep,
     RedisDep,
     SbpClientDep,
     SettingsDep,
@@ -30,6 +31,7 @@ from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.kyc import KycService
 from elbank.services.ledger import OutgoingChecks
 from elbank.services.otp import OtpService
+from elbank.services.payments import PaymentService, TemplateService
 from elbank.services.profile import ProfileService
 from elbank.services.rates import RatesService
 from elbank.services.sessions import access_revoked_before
@@ -261,6 +263,30 @@ def get_conversion_service(
 
 
 ConversionServiceDep = Annotated[ConversionService, Depends(get_conversion_service)]
+
+
+def get_payment_service(
+    *,
+    session: DbSessionDep,
+    guard: IdempotencyGuardDep,
+    checks: OutgoingChecksDep,
+    providers: ProviderClientDep,
+    cache: AccountCacheDep,
+    publisher: EventPublisherDep,
+) -> PaymentService:
+    return PaymentService(
+        session, guard, checks, providers=providers, cache=cache, publisher=publisher
+    )
+
+
+PaymentServiceDep = Annotated[PaymentService, Depends(get_payment_service)]
+
+
+def get_template_service(session: DbSessionDep) -> TemplateService:
+    return TemplateService(session)
+
+
+TemplateServiceDep = Annotated[TemplateService, Depends(get_template_service)]
 
 # Managers and admins: back-office endpoints.
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]

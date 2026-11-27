@@ -1,0 +1,21 @@
+{
+  "name": "Utilities (ЕИРЦ): refused with ACCOUNT_NOT_FOUND",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/utility/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.personal_account == '000000')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/utility_error.json"
+  }
+}

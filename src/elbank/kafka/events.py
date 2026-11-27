@@ -39,6 +39,8 @@ class EventType(StrEnum):
     TRANSFER_COMPLETED = "transfer.completed"
     TRANSFER_FAILED = "transfer.failed"
     TRANSFER_REVERSED = "transfer.reversed"
+    PAYMENT_PROCESSED = "payment.processed"
+    PAYMENT_FAILED = "payment.failed"
 
 
 class EventEnvelope(BaseModel):

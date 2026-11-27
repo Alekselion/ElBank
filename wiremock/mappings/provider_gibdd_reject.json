@@ -1,0 +1,21 @@
+{
+  "name": "Traffic police fines: refused with FINE_NOT_FOUND",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/gibdd/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.uin == '18800000000000000000')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/gibdd_error.json"
+  }
+}

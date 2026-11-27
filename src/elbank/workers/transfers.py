@@ -7,7 +7,8 @@ Every ``TRANSFERS_FINALIZER_INTERVAL_SECONDS``:
 - completes internal transfers whose cancel window has passed
   (``transfer.completed``);
 - fails external/SBP transfers left unconfirmed after a gateway timeout or stuck
-  in ``processing``, returning the money (``transfer.failed``).
+  in ``processing``, returning the money (``transfer.failed``);
+- does the same for provider payments (``payment.failed``).
 
 Rows are taken with ``SELECT ... FOR UPDATE SKIP LOCKED``, so several replicas are
 safe. A full batch is followed by the next one immediately. Errors are logged and
@@ -27,6 +28,7 @@ from elbank.db.session import create_engine, create_session_factory
 from elbank.kafka import EventPublisher, KafkaProducer
 from elbank.services.account_cache import AccountListCache
 from elbank.services.external_transfers import ExternalTimeoutResolver
+from elbank.services.payments import PaymentTimeoutResolver
 from elbank.services.transfers import TransferFinalizer
 
 logger = get_logger(__name__)
@@ -69,8 +71,13 @@ async def run(settings: Settings) -> None:
     cache = AccountListCache(redis, settings.accounts.list_cache_ttl_seconds)
     finalizer = TransferFinalizer(session_factory, publisher, settings.transfers)
     resolver = ExternalTimeoutResolver(session_factory, cache, publisher, settings.transfers)
+    payments = PaymentTimeoutResolver(session_factory, cache, publisher, settings.transfers)
     worker = TransferWorker(
-        {"finalize_internal": finalizer.run_once, "resolve_external": resolver.run_once},
+        {
+            "finalize_internal": finalizer.run_once,
+            "resolve_external": resolver.run_once,
+            "resolve_payments": payments.run_once,
+        },
         settings,
     )
     loop = asyncio.get_running_loop()

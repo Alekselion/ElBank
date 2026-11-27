@@ -1,0 +1,22 @@
+{
+  "name": "Federal Tax Service: no answer in time (delay exceeds PROVIDERS_TIMEOUT_SECONDS)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/providers/fns/pay",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.payload[?(@.uin == '99999999999999999999')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 8000,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "providers/fns_accepted.json"
+  }
+}

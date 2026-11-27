@@ -13,7 +13,14 @@ from fastapi import Depends, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from elbank.clients import CbrClient, GosuslugiClient, InterbankClient, SbpClient, SmsClient
+from elbank.clients import (
+    CbrClient,
+    GosuslugiClient,
+    InterbankClient,
+    ProviderClient,
+    SbpClient,
+    SmsClient,
+)
 from elbank.core.config import Settings, get_settings
 from elbank.db.session import get_session
 from elbank.kafka import EventPublisher, KafkaProducer
@@ -68,6 +75,10 @@ def get_cbr_client(resources: ResourcesDep, settings: SettingsDep) -> CbrClient:
     return CbrClient(resources.http, settings.cbr)
 
 
+def get_provider_client(resources: ResourcesDep, settings: SettingsDep) -> ProviderClient:
+    return ProviderClient(resources.http, settings.providers)
+
+
 DbSessionDep = Annotated[AsyncSession, Depends(get_session)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 KafkaDep = Annotated[KafkaProducer, Depends(get_kafka)]
@@ -77,3 +88,4 @@ GosuslugiClientDep = Annotated[GosuslugiClient, Depends(get_gosuslugi_client)]
 InterbankClientDep = Annotated[InterbankClient, Depends(get_interbank_client)]
 SbpClientDep = Annotated[SbpClient, Depends(get_sbp_client)]
 CbrClientDep = Annotated[CbrClient, Depends(get_cbr_client)]
+ProviderClientDep = Annotated[ProviderClient, Depends(get_provider_client)]
