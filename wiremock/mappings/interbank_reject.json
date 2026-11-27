@@ -1,0 +1,24 @@
+{
+  "name": "Interbank: rejected, payee account closed (payee account ends with 9999999)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/interbank/transfer",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.transfer_id =~ /^[0-9a-f-]{36}$/)]" },
+      { "matchesJsonPath": "$.payee[?(@.account =~ /^[0-9]{13}9999999$/)]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "jsonBody": {
+      "status": "rejected",
+      "external_id": "IB-{{randomValue length=16 type='NUMERIC'}}",
+      "reason": "Счёт получателя закрыт"
+    }
+  }
+}

@@ -141,6 +141,35 @@ class GosuslugiSettings(_Section):
     retries: int = Field(default=2, ge=0, le=5)  # extra attempts after the first one
 
 
+class InterbankSettings(_Section):
+    """Interbank transfer gateway (``POST /interbank/transfer`` on WireMock)."""
+
+    model_config = SettingsConfigDict(env_prefix="INTERBANK_")
+
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    # Extra attempts on connection errors and 502/503/504 (never after a read timeout).
+    retries: int = Field(default=2, ge=0, le=5)
+
+
+class SbpSettings(_Section):
+    """Faster Payments System gateway (``POST /sbp/send`` on WireMock)."""
+
+    model_config = SettingsConfigDict(env_prefix="SBP_")
+
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    retries: int = Field(default=2, ge=0, le=5)
+
+
+class CbrSettings(_Section):
+    """Bank of Russia exchange rates (``GET /cbr/rates`` on WireMock)."""
+
+    model_config = SettingsConfigDict(env_prefix="CBR_")
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+    retries: int = Field(default=2, ge=0, le=5)
+    rates_cache_ttl_seconds: int = Field(default=60, ge=1)
+
+
 class KycSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="KYC_")
 
@@ -204,6 +233,12 @@ class TransferSettings(_Section):
     lock_ttl_seconds: int = Field(default=30, ge=1)
     # How long a parallel request with the same key waits for the lock before 409.
     lock_wait_seconds: float = Field(default=5.0, ge=0)
+    # Currency conversion between own accounts: percent of the debited amount.
+    conversion_fee_percent: Decimal = Field(default=Decimal("1"), ge=0, le=100)
+    # External transfer timed out: it stays "pending" (EXTERNAL_TIMEOUT) this long, then fails.
+    external_timeout_fail_after_seconds: int = Field(default=5, ge=0)
+    # External transfer stuck in "processing" (process died mid-request) is failed after this.
+    external_stale_after_seconds: int = Field(default=120, ge=30)
     finalizer_interval_seconds: float = Field(default=5.0, gt=0)
     finalizer_batch_size: int = Field(default=100, ge=1, le=1000)
 
@@ -232,6 +267,9 @@ class Settings(_Section):
     logstash: LogstashSettings = Field(default_factory=LogstashSettings)
     wiremock: WiremockSettings = Field(default_factory=WiremockSettings)
     gosuslugi: GosuslugiSettings = Field(default_factory=GosuslugiSettings)
+    interbank: InterbankSettings = Field(default_factory=InterbankSettings)
+    sbp: SbpSettings = Field(default_factory=SbpSettings)
+    cbr: CbrSettings = Field(default_factory=CbrSettings)
     kyc: KycSettings = Field(default_factory=KycSettings)
     bank: BankSettings = Field(default_factory=BankSettings)
     accounts: AccountSettings = Field(default_factory=AccountSettings)

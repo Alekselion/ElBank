@@ -46,7 +46,11 @@ class AccountStatus(StrEnum):
 
 class OperationType(StrEnum):
     TRANSFER_IN = "transfer_in"
-    TRANSFER_OUT = "transfer_out"
+    TRANSFER_OUT = "transfer_out"  # internal transfer (to an account of this bank)
+    EXTERNAL_TRANSFER = "external_transfer"  # to another bank by requisites
+    SBP_TRANSFER = "sbp_transfer"  # Faster Payments System, by phone number
+    CONVERSION_OUT = "conversion_out"  # currency exchange between own accounts: debit leg
+    CONVERSION_IN = "conversion_in"  # ... and credit leg
     PAYMENT = "payment"
     FEE = "fee"
     INTEREST = "interest"

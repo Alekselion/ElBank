@@ -1,0 +1,28 @@
+{
+  "name": "Bank of Russia: daily exchange rates (XML_daily structure, JSON form)",
+  "priority": 10,
+  "request": {
+    "method": "GET",
+    "urlPath": "/cbr/rates"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json; charset=utf-8" },
+    "jsonBody": {
+      "Date": "{{now format='yyyy-MM-dd' timezone='Europe/Moscow'}}T11:30:00+03:00",
+      "PreviousDate": "{{now offset='-1 days' format='yyyy-MM-dd' timezone='Europe/Moscow'}}T11:30:00+03:00",
+      "PreviousURL": "//www.cbr-xml-daily.ru/archive/{{now offset='-1 days' format='yyyy/MM/dd'}}/daily_json.js",
+      "Timestamp": "{{now format='yyyy-MM-dd' timezone='Europe/Moscow'}}T{{now format='HH:mm:ss' timezone='Europe/Moscow'}}+03:00",
+      "Valute": {
+        "USD": { "ID": "R01235", "NumCode": "840", "CharCode": "USD", "Nominal": 1, "Name": "Доллар США", "Value": 80.4166, "Previous": 80.1247 },
+        "EUR": { "ID": "R01239", "NumCode": "978", "CharCode": "EUR", "Nominal": 1, "Name": "Евро", "Value": 93.2815, "Previous": 92.9902 },
+        "CNY": { "ID": "R01375", "NumCode": "156", "CharCode": "CNY", "Nominal": 1, "Name": "Китайский юань", "Value": 11.2843, "Previous": 11.2516 },
+        "GBP": { "ID": "R01035", "NumCode": "826", "CharCode": "GBP", "Nominal": 1, "Name": "Фунт стерлингов Соединенного королевства", "Value": 105.6932, "Previous": 105.3014 },
+        "CHF": { "ID": "R01775", "NumCode": "756", "CharCode": "CHF", "Nominal": 1, "Name": "Швейцарский франк", "Value": 99.8710, "Previous": 99.5023 },
+        "JPY": { "ID": "R01820", "NumCode": "392", "CharCode": "JPY", "Nominal": 100, "Name": "Японских иен", "Value": 51.7342, "Previous": 51.6018 },
+        "KZT": { "ID": "R01335", "NumCode": "398", "CharCode": "KZT", "Nominal": 100, "Name": "Казахстанских тенге", "Value": 15.4021, "Previous": 15.3807 },
+        "TRY": { "ID": "R01700J", "NumCode": "949", "CharCode": "TRY", "Nominal": 10, "Name": "Турецких лир", "Value": 18.9476, "Previous": 18.9012 }
+      }
+    }
+  }
+}

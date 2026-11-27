@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import CheckConstraint, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from elbank.db.base import Base, TimestampMixin, UUIDMixin, str_enum
+from elbank.db.base import EXCHANGE_RATE, Base, TimestampMixin, UUIDMixin, str_enum
 from elbank.db.models.account import CURRENCY_CHECK
 from elbank.db.models.enums import (
     OperationStatus,
@@ -59,6 +59,10 @@ class Operation(UUIDMixin, TimestampMixin, Base):
     reversed_operation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("operations.id", ondelete="RESTRICT")
     )
+    # Transaction id assigned by an external system (interbank / SBP).
+    external_id: Mapped[str | None] = mapped_column(String(64))
+    # Conversion: units of the credited currency per one unit of the debited currency.
+    exchange_rate: Mapped[Decimal | None] = mapped_column(EXCHANGE_RATE)
 
     parent: Mapped[Operation | None] = relationship(
         remote_side="Operation.id", foreign_keys=[parent_operation_id], lazy="raise"

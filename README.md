@@ -192,13 +192,19 @@ Redis не ломает `GET /` — ответ берётся из БД.
 
 ## Переводы
 
-`/api/v1/transfers` — переводы между счетами банка (своими и чужими).
+`/api/v1/transfers`:
 
 | Метод и путь                  | Назначение                                                        |
 |-------------------------------|-------------------------------------------------------------------|
-| `POST /internal`              | `{from_account_id, to_account_id, amount, currency, description, idempotency_key}` |
-| `GET /{operation_id}`         | статус перевода                                                   |
-| `POST /{operation_id}/cancel` | отмена `pending`-перевода в окне отмены → `transfer.reversed`     |
+| `POST /internal`              | на счёт этого банка: `{from_account_id, to_account_id, amount, currency, description, idempotency_key}` |
+| `POST /external`              | в другой банк: `{from_account_id, bic, account_number, recipient_name, amount, description, idempotency_key}` |
+| `POST /sbp`                   | по телефону (СБП): `{from_account_id, phone, amount, description}` + заголовок `Idempotency-Key` |
+| `POST /convert`               | обмен валют между своими счетами: `{from_account_id, to_account_id, amount, idempotency_key}` |
+| `GET /rates?base=RUB&quote=USD` | курс ЦБ (кэш Redis `rates:{base}:{quote}`, 60 с)                |
+| `GET /{operation_id}`         | статус перевода любого типа (`type`: internal/external/sbp/conversion) |
+| `POST /{operation_id}/cancel` | отмена внутреннего `pending`-перевода в окне отмены → `transfer.reversed` |
+
+### Внутренние переводы
 
 Жизненный цикл:
 
@@ -225,7 +231,49 @@ IDEMPOTENCY_KEY_REUSED`. Пока запрос обрабатывается, в 
 или `409 OPERATION_IN_PROGRESS`. Если Redis недоступен, дубли всё равно отсекает уникальный индекс в БД.
 
 Все смены статусов операций проходят через `services/operation_service.py` (state machine:
-`created → pending → processing → completed`, `failed`/`cancelled` — из незавершённых статусов).
+`created → pending → processing → completed`, `failed`/`cancelled` — из незавершённых статусов,
+`processing → pending` — внешний шлюз не ответил). Идемпотентность общая для всех каналов
+(`services/idempotency.py`).
+
+### Внешние переводы и СБП
+
+Только с рублёвых счетов, без комиссии, с проверкой статуса, баланса и лимитов. Номер счёта получателя
+проверяется по контрольному ключу его БИК; БИК нашего банка отклоняется (для него есть `/internal`).
+
+1. Деньги списываются, операция (`external_transfer` / `sbp_transfer`) переходит в `processing`, коммит.
+2. Вызов шлюза (`clients/interbank.py`, `clients/sbp.py`): таймаут 10 с, заголовок
+   `Idempotency-Key: <operation_id>`. Повтор (до 2 раз) — только при ошибке соединения и 502/503/504,
+   после таймаута чтения повтора нет: исход неизвестен.
+3. По ответу:
+
+| Ответ шлюза         | Операция                                              | Событие              |
+|---------------------|-------------------------------------------------------|----------------------|
+| `accepted`          | `completed`, `external_id`                            | `transfer.completed` |
+| `rejected`          | `failed`, `EXTERNAL_REJECTED`, деньги возвращаются    | `transfer.failed`    |
+| ошибка / 4xx / 5xx  | `failed`, `EXTERNAL_UNAVAILABLE`, деньги возвращаются | `transfer.failed`    |
+| таймаут             | `pending`, `EXTERNAL_TIMEOUT`                         | — (см. ниже)         |
+
+Неподтверждённый перевод `transfers-worker` через `TRANSFERS_EXTERNAL_TIMEOUT_FAIL_AFTER_SECONDS` (5 с)
+переводит в `failed`, возвращает деньги и публикует `transfer.failed`. Так же он закрывает переводы,
+зависшие в `processing` дольше `TRANSFERS_EXTERNAL_STALE_AFTER_SECONDS` (процесс API упал во время вызова).
+Воркер, а не `asyncio.create_task` в API, выбран потому, что задача не теряется при рестарте.
+
+### Конвертация
+
+Курс — кросс-курс ЦБ из `/rates` (8 знаков), комиссия 1 % (`TRANSFERS_CONVERSION_FEE_PERCENT`) в валюте
+списания. Зачисляется `amount * rate` с округлением вниз до копеек. Всё в одной транзакции:
+`conversion_out` + `conversion_in` + `fee` сразу `completed`, событие `transfer.completed` с
+`type=conversion`. Лимиты не применяются.
+
+### Тестовые данные WireMock
+
+| Сценарий                    | Данные                                                       |
+|-----------------------------|--------------------------------------------------------------|
+| межбанк: принят             | БИК `044525225`, счёт `40817810800010000001`                 |
+| межбанк: отклонён           | счёт получателя оканчивается на `9999999`, например `40817810600019999999` |
+| СБП: принят                 | любой телефон `+7XXXXXXXXXX`                                 |
+| СБП: таймаут (15 с)         | `+79990000002`                                               |
+| курсы ЦБ                    | `GET /cbr/rates`: USD, EUR, CNY и др., дата — сегодня        |
 
 ## Логи
 

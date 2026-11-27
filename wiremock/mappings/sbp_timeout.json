@@ -1,0 +1,21 @@
+{
+  "name": "SBP: no answer in time for the test phone +79990000002 (delay exceeds client timeout)",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/sbp/send",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.phone == '+79990000002')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 15000,
+    "headers": { "Content-Type": "application/json; charset=utf-8" },
+    "jsonBody": {
+      "status": "accepted",
+      "external_id": "SBP-{{randomValue length=20 type='ALPHANUMERIC' uppercase=true}}",
+      "reason": null
+    }
+  }
+}

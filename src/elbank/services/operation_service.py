@@ -4,7 +4,10 @@ State machine::
 
     created    → pending | failed | cancelled
     pending    → processing | failed | cancelled
-    processing → completed | failed
+    processing → completed | failed | pending
+
+``processing → pending``: an external gateway timed out, the outcome is unknown
+and the operation waits for confirmation (``error_code`` says why).
 
 ``completed``, ``failed`` and ``cancelled`` are terminal. An invalid transition
 raises :class:`InvalidStateError` (HTTP 409). The service does not commit: the
@@ -29,7 +32,9 @@ _TRANSITIONS: dict[OperationStatus, frozenset[OperationStatus]] = {
     OperationStatus.PENDING: frozenset(
         {OperationStatus.PROCESSING, OperationStatus.FAILED, OperationStatus.CANCELLED}
     ),
-    OperationStatus.PROCESSING: frozenset({OperationStatus.COMPLETED, OperationStatus.FAILED}),
+    OperationStatus.PROCESSING: frozenset(
+        {OperationStatus.COMPLETED, OperationStatus.FAILED, OperationStatus.PENDING}
+    ),
     OperationStatus.COMPLETED: frozenset(),
     OperationStatus.FAILED: frozenset(),
     OperationStatus.CANCELLED: frozenset(),
@@ -61,6 +66,7 @@ class OperationService:
         counterparty_account: str | None = None,
         description: str | None = None,
         idempotency_key: str | None = None,
+        exchange_rate: Decimal | None = None,
     ) -> Operation:
         """Add a new operation to the session and move it ``created`` → ``pending``."""
         operation = Operation(
@@ -76,6 +82,7 @@ class OperationService:
             counterparty_account=counterparty_account,
             description=description,
             idempotency_key=idempotency_key,
+            exchange_rate=exchange_rate,
         )
         self._transition(operation, OperationStatus.PENDING)
         self._session.add(operation)
@@ -83,6 +90,11 @@ class OperationService:
 
     def mark_processing(self, operation: Operation) -> None:
         self._transition(operation, OperationStatus.PROCESSING)
+
+    def mark_pending(self, operation: Operation, error_code: str) -> None:
+        """``processing → pending``: waiting for an external confirmation."""
+        self._transition(operation, OperationStatus.PENDING)
+        operation.error_code = error_code
 
     def mark_completed(self, operation: Operation) -> None:
         self._transition(operation, OperationStatus.COMPLETED)

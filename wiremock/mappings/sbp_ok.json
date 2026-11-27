@@ -1,0 +1,31 @@
+{
+  "name": "SBP: transfer accepted (any well-formed request)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/sbp/send",
+    "headers": {
+      "Content-Type": { "contains": "application/json" },
+      "Idempotency-Key": { "matches": "^[0-9a-f-]{36}$" }
+    },
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.transfer_id =~ /^[0-9a-f-]{36}$/)]" },
+      { "matchesJsonPath": "$[?(@.payer_account =~ /^[0-9]{20}$/)]" },
+      { "matchesJsonPath": "$[?(@.phone =~ /^\\+7[0-9]{10}$/)]" },
+      { "matchesJsonPath": "$[?(@.amount =~ /^[0-9]+\\.[0-9]{2}$/)]" },
+      { "matchesJsonPath": "$[?(@.currency == 'RUB')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "jsonBody": {
+      "status": "accepted",
+      "external_id": "SBP-{{randomValue length=20 type='ALPHANUMERIC' uppercase=true}}",
+      "reason": null
+    }
+  }
+}

@@ -11,19 +11,27 @@ from elbank.core.exceptions import AuthenticationError, PermissionDeniedError, U
 from elbank.core.security import InvalidTokenError, TokenType, decode_token
 from elbank.db.models import User, UserRole, UserStatus
 from elbank.deps import (
+    CbrClientDep,
     DbSessionDep,
     EventPublisherDep,
     GosuslugiClientDep,
+    InterbankClientDep,
     RedisDep,
+    SbpClientDep,
     SettingsDep,
     SmsClientDep,
 )
 from elbank.services.account_cache import AccountListCache
 from elbank.services.accounts import AccountService
 from elbank.services.auth import AuthService
+from elbank.services.conversion import ConversionService
+from elbank.services.external_transfers import ExternalTransferService
+from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.kyc import KycService
+from elbank.services.ledger import OutgoingChecks
 from elbank.services.otp import OtpService
 from elbank.services.profile import ProfileService
+from elbank.services.rates import RatesService
 from elbank.services.sessions import access_revoked_before
 from elbank.services.statements import StatementJobStore, StatementService
 from elbank.services.transfers import TransferService
@@ -150,24 +158,109 @@ def get_statement_service(
 StatementServiceDep = Annotated[StatementService, Depends(get_statement_service)]
 
 
+def get_account_cache(redis: RedisDep, settings: SettingsDep) -> AccountListCache:
+    return AccountListCache(redis, settings.accounts.list_cache_ttl_seconds)
+
+
+AccountCacheDep = Annotated[AccountListCache, Depends(get_account_cache)]
+
+
+def get_idempotency_guard(
+    session: DbSessionDep, redis: RedisDep, settings: SettingsDep
+) -> IdempotencyGuard:
+    return IdempotencyGuard(session, redis, settings.transfers)
+
+
+IdempotencyGuardDep = Annotated[IdempotencyGuard, Depends(get_idempotency_guard)]
+
+
+def get_outgoing_checks(session: DbSessionDep, settings: SettingsDep) -> OutgoingChecks:
+    return OutgoingChecks(session, settings.accounts)
+
+
+OutgoingChecksDep = Annotated[OutgoingChecks, Depends(get_outgoing_checks)]
+
+
 def get_transfer_service(
+    *,
     session: DbSessionDep,
-    redis: RedisDep,
+    guard: IdempotencyGuardDep,
+    checks: OutgoingChecksDep,
+    cache: AccountCacheDep,
     publisher: EventPublisherDep,
     settings: SettingsDep,
 ) -> TransferService:
-    cache = AccountListCache(redis, settings.accounts.list_cache_ttl_seconds)
     return TransferService(
         session,
-        redis,
+        guard,
+        checks,
         cache=cache,
         publisher=publisher,
         settings=settings.transfers,
-        account_settings=settings.accounts,
     )
 
 
 TransferServiceDep = Annotated[TransferService, Depends(get_transfer_service)]
+
+
+def get_external_transfer_service(
+    *,
+    session: DbSessionDep,
+    guard: IdempotencyGuardDep,
+    checks: OutgoingChecksDep,
+    interbank: InterbankClientDep,
+    sbp: SbpClientDep,
+    cache: AccountCacheDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> ExternalTransferService:
+    return ExternalTransferService(
+        session,
+        guard,
+        checks,
+        interbank=interbank,
+        sbp=sbp,
+        cache=cache,
+        publisher=publisher,
+        bank=settings.bank,
+        settings=settings.transfers,
+    )
+
+
+ExternalTransferServiceDep = Annotated[
+    ExternalTransferService, Depends(get_external_transfer_service)
+]
+
+
+def get_rates_service(redis: RedisDep, cbr: CbrClientDep, settings: SettingsDep) -> RatesService:
+    return RatesService(redis, cbr, settings.cbr)
+
+
+RatesServiceDep = Annotated[RatesService, Depends(get_rates_service)]
+
+
+def get_conversion_service(
+    *,
+    session: DbSessionDep,
+    guard: IdempotencyGuardDep,
+    checks: OutgoingChecksDep,
+    rates: RatesServiceDep,
+    cache: AccountCacheDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> ConversionService:
+    return ConversionService(
+        session,
+        guard,
+        checks,
+        rates=rates,
+        cache=cache,
+        publisher=publisher,
+        settings=settings.transfers,
+    )
+
+
+ConversionServiceDep = Annotated[ConversionService, Depends(get_conversion_service)]
 
 # Managers and admins: back-office endpoints.
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]
