@@ -1,0 +1,72 @@
+{
+  "mappings": [
+    {
+      "name": "BKI: reject (score 480) for the test phone +79990000007",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/bki/score",
+        "bodyPatterns": [{ "matchesJsonPath": "$[?(@.phone == '+79990000007')]" }]
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json; charset=utf-8" },
+        "jsonBody": {
+          "score": 480,
+          "decision": "reject",
+          "comment": "Просрочки по действующим кредитам"
+        }
+      }
+    },
+    {
+      "name": "BKI: approve, but score 580 is below the bank threshold, for +79990000008",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/bki/score",
+        "bodyPatterns": [{ "matchesJsonPath": "$[?(@.phone == '+79990000008')]" }]
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json; charset=utf-8" },
+        "jsonBody": {
+          "score": 580,
+          "decision": "approve",
+          "comment": "Короткая кредитная история"
+        }
+      }
+    },
+    {
+      "name": "BKI: approve with a high score 810 (lower rate) for +79990000010",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/bki/score",
+        "bodyPatterns": [{ "matchesJsonPath": "$[?(@.phone == '+79990000010')]" }]
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json; charset=utf-8" },
+        "jsonBody": {
+          "score": 810,
+          "decision": "approve",
+          "comment": "Отличная кредитная история"
+        }
+      }
+    },
+    {
+      "name": "BKI: unavailable for the test phone +79990000009 (retried, then 503)",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/bki/score",
+        "bodyPatterns": [{ "matchesJsonPath": "$[?(@.phone == '+79990000009')]" }]
+      },
+      "response": {
+        "status": 503,
+        "headers": { "Content-Type": "application/json; charset=utf-8" },
+        "jsonBody": { "error": "Service temporarily unavailable" }
+      }
+    }
+  ]
+}

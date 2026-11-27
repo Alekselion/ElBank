@@ -207,6 +207,25 @@ class CardSettings(_Section):
         return self
 
 
+class BkiSettings(_Section):
+    """Credit bureau scoring (``POST /bki/score`` on WireMock)."""
+
+    model_config = SettingsConfigDict(env_prefix="BKI_")
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+    # Extra attempts on 5xx, timeouts and connection errors (never on 4xx).
+    retries: int = Field(default=2, ge=0, le=5)
+
+
+class BrokerSettings(_Section):
+    """Broker (``GET /broker/quotes``, ``POST /broker/orders`` on WireMock)."""
+
+    model_config = SettingsConfigDict(env_prefix="BROKER_")
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+    retries: int = Field(default=2, ge=0, le=5)
+
+
 class CbrSettings(_Section):
     """Bank of Russia exchange rates (``GET /cbr/rates`` on WireMock)."""
 
@@ -253,6 +272,49 @@ class AccountSettings(_Section):
             raise ValueError(
                 "ACCOUNTS_DEFAULT_MONTHLY_LIMIT must be >= ACCOUNTS_DEFAULT_DAILY_LIMIT"
             )
+        return self
+
+
+class CreditSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="CREDITS_")
+
+    min_amount: Decimal = Field(default=Decimal("10000.00"), gt=0, decimal_places=2)
+    max_amount: Decimal = Field(default=Decimal("5000000.00"), gt=0, decimal_places=2)
+    min_term_months: int = Field(default=3, ge=1)
+    max_term_months: int = Field(default=84, ge=1)
+    # Approved only if the bureau says "approve" and the score is at least this.
+    min_score: int = Field(default=600, ge=0)
+    # Annual rate, percent; the lower one for scores >= good_score.
+    base_rate: Decimal = Field(default=Decimal("21.9"), ge=0, le=100)
+    good_score: int = Field(default=750, ge=0)
+    good_score_rate: Decimal = Field(default=Decimal("17.9"), ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.max_amount < self.min_amount:
+            raise ValueError("CREDITS_MAX_AMOUNT must be >= CREDITS_MIN_AMOUNT")
+        if self.max_term_months < self.min_term_months:
+            raise ValueError("CREDITS_MAX_TERM_MONTHS must be >= CREDITS_MIN_TERM_MONTHS")
+        return self
+
+
+class DepositSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="DEPOSITS_")
+
+    min_amount: Decimal = Field(default=Decimal("1000.00"), gt=0, decimal_places=2)
+    # The client chooses the rate within (0, max_rate].
+    max_rate: Decimal = Field(default=Decimal("18"), gt=0, le=100)
+    min_term_months: int = Field(default=1, ge=1)
+    max_term_months: int = Field(default=60, ge=1)
+    # Interest is recalculated at this rate when a deposit is closed before its end date.
+    early_close_rate: Decimal = Field(default=Decimal("0.01"), ge=0, le=100)
+    consumer_group: str = "elbank-deposits"
+    accrual_batch_size: int = Field(default=100, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.max_term_months < self.min_term_months:
+            raise ValueError("DEPOSITS_MAX_TERM_MONTHS must be >= DEPOSITS_MIN_TERM_MONTHS")
         return self
 
 
@@ -318,11 +380,15 @@ class Settings(_Section):
     sbp: SbpSettings = Field(default_factory=SbpSettings)
     cbr: CbrSettings = Field(default_factory=CbrSettings)
     providers: ProviderSettings = Field(default_factory=ProviderSettings)
+    bki: BkiSettings = Field(default_factory=BkiSettings)
+    broker: BrokerSettings = Field(default_factory=BrokerSettings)
     card_processor: CardProcessorSettings = Field(default_factory=CardProcessorSettings)
     cards: CardSettings = Field(default_factory=CardSettings)
     kyc: KycSettings = Field(default_factory=KycSettings)
     bank: BankSettings = Field(default_factory=BankSettings)
     accounts: AccountSettings = Field(default_factory=AccountSettings)
+    credits: CreditSettings = Field(default_factory=CreditSettings)
+    deposits: DepositSettings = Field(default_factory=DepositSettings)
     statements: StatementSettings = Field(default_factory=StatementSettings)
     transfers: TransferSettings = Field(default_factory=TransferSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)

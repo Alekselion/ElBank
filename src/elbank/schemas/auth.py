@@ -35,6 +35,8 @@ Password = Annotated[
 def _public_otp_purpose(value: OtpPurpose) -> OtpPurpose:
     if value is OtpPurpose.PHONE_CHANGE:
         raise ValueError("phone_change codes are requested via /api/v1/users/me/change-phone")
+    if value is OtpPurpose.CREDIT_SIGN:
+        raise ValueError("credit_sign codes are requested via /api/v1/credits/{id}/sign/otp")
     return value
 
 

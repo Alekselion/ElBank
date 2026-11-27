@@ -1,0 +1,13 @@
+{
+  "as_of": "{{now}}",
+  "quotes": [
+    { "ticker": "SBER", "name": "Сбербанк", "price": "285.40", "currency": "RUB", "change_percent": "-0.35" },
+    { "ticker": "GAZP", "name": "Газпром", "price": "128.72", "currency": "RUB", "change_percent": "1.12" },
+    { "ticker": "LKOH", "name": "Лукойл", "price": "6912.50", "currency": "RUB", "change_percent": "0.48" },
+    { "ticker": "YDEX", "name": "Яндекс", "price": "4105.00", "currency": "RUB", "change_percent": "-1.07" },
+    { "ticker": "GMKN", "name": "Норникель", "price": "121.86", "currency": "RUB", "change_percent": "0.21" },
+    { "ticker": "MTSS", "name": "МТС", "price": "214.15", "currency": "RUB", "change_percent": "-0.62" },
+    { "ticker": "ROSN", "name": "Роснефть", "price": "512.30", "currency": "RUB", "change_percent": "0.05" },
+    { "ticker": "VTBR", "name": "Банк ВТБ", "price": "0.0245", "currency": "RUB", "change_percent": "2.30" }
+  ]
+}

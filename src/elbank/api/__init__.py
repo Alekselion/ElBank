@@ -2,7 +2,19 @@
 
 from fastapi import APIRouter
 
-from elbank.api.routes import accounts, auth, cards, health, kyc, payments, transfers, users
+from elbank.api.routes import (
+    accounts,
+    auth,
+    cards,
+    credits,
+    deposits,
+    health,
+    investments,
+    kyc,
+    payments,
+    transfers,
+    users,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -14,5 +26,9 @@ api_router.include_router(accounts.router, prefix="/api/v1/accounts")
 api_router.include_router(transfers.router, prefix="/api/v1/transfers")
 api_router.include_router(payments.router, prefix="/api/v1/payments")
 api_router.include_router(cards.router, prefix="/api/v1/cards")
+api_router.include_router(credits.router, prefix="/api/v1/credits")
+api_router.include_router(deposits.router, prefix="/api/v1/deposits")
+api_router.include_router(deposits.admin_router, prefix="/api/v1/admin/deposits")
+api_router.include_router(investments.router, prefix="/api/v1/investments")
 
 __all__ = ["api_router"]

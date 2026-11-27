@@ -35,6 +35,7 @@ class OtpPurpose(StrEnum):
     RESET = "reset"
     PHONE_CHANGE = "phone_change"
     TWO_FACTOR = "two_factor"  # enabling/disabling 2FA
+    CREDIT_SIGN = "credit_sign"  # signing a credit agreement
 
 
 class TokenPayload(BaseModel):

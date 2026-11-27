@@ -1,0 +1,21 @@
+{
+  "name": "Broker: rejected, more than 10000 securities in one order",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/broker/orders",
+    "bodyPatterns": [{ "matchesJsonPath": "$[?(@.quantity > 10000)]" }]
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "jsonBody": {
+      "status": "rejected",
+      "code": "INSUFFICIENT_LIQUIDITY",
+      "message": "Недостаточно ликвидности для исполнения заявки"
+    }
+  }
+}

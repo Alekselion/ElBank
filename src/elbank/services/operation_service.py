@@ -88,6 +88,32 @@ class OperationService:
         self._session.add(operation)
         return operation
 
+    def create_completed(
+        self,
+        *,
+        account_id: uuid.UUID,
+        type: OperationType,
+        amount: Decimal,
+        currency: str,
+        user_id: uuid.UUID | None = None,
+        parent_operation_id: uuid.UUID | None = None,
+        description: str | None = None,
+    ) -> Operation:
+        """A posting settled at once inside the bank (credits, deposits, brokerage):
+        ``created → pending → processing → completed`` in the caller's transaction."""
+        operation = self.create_pending(
+            account_id=account_id,
+            type=type,
+            amount=amount,
+            currency=currency,
+            user_id=user_id,
+            parent_operation_id=parent_operation_id,
+            description=description,
+        )
+        self.mark_processing(operation)
+        self.mark_completed(operation)
+        return operation
+
     def mark_processing(self, operation: Operation) -> None:
         self._transition(operation, OperationStatus.PROCESSING)
 

@@ -47,6 +47,7 @@ _SMS_TEXT = {
     OtpPurpose.RESET: "ElBank: password reset code {code}. Do not share it with anyone.",
     OtpPurpose.PHONE_CHANGE: "ElBank: phone change confirmation code {code}.",
     OtpPurpose.TWO_FACTOR: "ElBank: two-factor settings confirmation code {code}.",
+    OtpPurpose.CREDIT_SIGN: "ElBank: credit agreement signing code {code}. Do not share it.",
 }
 
 

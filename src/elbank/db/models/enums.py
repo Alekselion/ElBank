@@ -53,7 +53,14 @@ class OperationType(StrEnum):
     CONVERSION_IN = "conversion_in"  # ... and credit leg
     PAYMENT = "payment"
     FEE = "fee"
-    INTEREST = "interest"
+    INTEREST = "interest"  # deposit interest paid out to the account
+    CREDIT_DISBURSEMENT = "credit_disbursement"  # credit amount credited after signing
+    CREDIT_REPAYMENT = "credit_repayment"
+    DEPOSIT_OPEN = "deposit_open"  # account → deposit
+    DEPOSIT_TOP_UP = "deposit_top_up"  # account → deposit
+    DEPOSIT_CLOSE = "deposit_close"  # deposit principal → account
+    INVESTMENT_BUY = "investment_buy"
+    INVESTMENT_SELL = "investment_sell"
 
 
 class OperationStatus(StrEnum):
@@ -109,6 +116,16 @@ class DepositStatus(StrEnum):
     ACTIVE = "active"
     CLOSED = "closed"
     EARLY_CLOSED = "early_closed"
+
+
+class InvestmentSide(StrEnum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class InvestmentOrderStatus(StrEnum):
+    FILLED = "filled"
+    REJECTED = "rejected"  # refused by the broker; no money moved
 
 
 class TicketStatus(StrEnum):

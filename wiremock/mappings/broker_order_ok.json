@@ -1,0 +1,27 @@
+{
+  "name": "Broker: order filled at the limit price (any well-formed order)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/broker/orders",
+    "headers": {
+      "Content-Type": { "contains": "application/json" },
+      "Idempotency-Key": { "matches": "^[0-9a-f-]{36}$" }
+    },
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.order_id =~ /^[0-9a-f-]{36}$/)]" },
+      { "matchesJsonPath": "$[?(@.side in ['buy', 'sell'])]" },
+      { "matchesJsonPath": "$[?(@.ticker =~ /^[A-Z0-9]{1,12}$/)]" },
+      { "matchesJsonPath": "$[?(@.quantity > 0)]" },
+      { "matchesJsonPath": "$[?(@.limit_price =~ /^[0-9]+(\\.[0-9]+)?$/)]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "broker/order_filled.json"
+  }
+}

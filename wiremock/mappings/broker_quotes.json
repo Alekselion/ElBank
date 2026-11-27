@@ -1,0 +1,12 @@
+{
+  "name": "Broker: stock quotes",
+  "request": { "method": "GET", "url": "/broker/quotes" },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "bodyFileName": "broker/quotes.json"
+  }
+}

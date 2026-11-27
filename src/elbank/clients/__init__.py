@@ -1,5 +1,14 @@
 """HTTP clients for external services (mocked by WireMock locally)."""
 
+from elbank.clients.bki import BkiClient, BkiDecision, BkiUnavailableError, ScoringResult
+from elbank.clients.broker import (
+    BrokerClient,
+    BrokerRejectedError,
+    BrokerUnavailableError,
+    OrderFill,
+    Quote,
+    Quotes,
+)
 from elbank.clients.card_processor import (
     CardProcessorClient,
     CardProcessorRefusedError,
@@ -15,6 +24,12 @@ from elbank.clients.sbp import SbpClient
 from elbank.clients.sms import SmsClient, SmsGatewayError
 
 __all__ = [
+    "BkiClient",
+    "BkiDecision",
+    "BkiUnavailableError",
+    "BrokerClient",
+    "BrokerRejectedError",
+    "BrokerUnavailableError",
     "CardProcessorClient",
     "CardProcessorRefusedError",
     "CardProcessorUnavailableError",
@@ -24,9 +39,13 @@ __all__ = [
     "GosuslugiError",
     "InterbankClient",
     "IssuedCard",
+    "OrderFill",
     "PassportVerification",
     "ProviderClient",
+    "Quote",
+    "Quotes",
     "SbpClient",
+    "ScoringResult",
     "SmsClient",
     "SmsGatewayError",
     "create_http_client",

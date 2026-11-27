@@ -15,6 +15,8 @@ from elbank.db.models.enums import (
     CreditStatus,
     Currency,
     DepositStatus,
+    InvestmentOrderStatus,
+    InvestmentSide,
     KycStatus,
     NotificationChannel,
     OperationStatus,
@@ -28,7 +30,7 @@ from elbank.db.models.enums import (
 )
 from elbank.db.models.notification import Notification
 from elbank.db.models.operation import Operation, PaymentOrder, TransferTemplate
-from elbank.db.models.product import Credit, Deposit
+from elbank.db.models.product import Credit, Deposit, InvestmentOrder, InvestmentPosition
 from elbank.db.models.support import SupportMessage, SupportTicket
 from elbank.db.models.user import KycRequest, RefreshToken, User
 
@@ -48,6 +50,10 @@ __all__ = [
     "Deposit",
     "DepositStatus",
     "FraudRule",
+    "InvestmentOrder",
+    "InvestmentOrderStatus",
+    "InvestmentPosition",
+    "InvestmentSide",
     "KycRequest",
     "KycStatus",
     "Notification",

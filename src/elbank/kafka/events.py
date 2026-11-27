@@ -44,6 +44,14 @@ class EventType(StrEnum):
     CARD_ISSUED = "card.issued"
     CARD_BLOCKED = "card.blocked"
     CARD_UNBLOCKED = "card.unblocked"
+    CREDIT_APPROVED = "credit.approved"
+    CREDIT_REJECTED = "credit.rejected"
+    CREDIT_SIGNED = "credit.signed"
+    CREDIT_CLOSED = "credit.closed"
+    DEPOSIT_OPENED = "deposit.opened"
+    DEPOSIT_CLOSED = "deposit.closed"
+    DEPOSIT_INTEREST_TICK = "deposit.interest.tick"
+    INVESTMENT_ORDER_CREATED = "investment.order.created"
 
 
 class EventEnvelope(BaseModel):

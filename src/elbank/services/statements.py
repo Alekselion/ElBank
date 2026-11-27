@@ -38,7 +38,14 @@ from elbank.schemas.account import StatementJobStatus
 logger = get_logger(__name__)
 
 _CREDIT_TYPES = frozenset(
-    {OperationType.TRANSFER_IN, OperationType.CONVERSION_IN, OperationType.INTEREST}
+    {
+        OperationType.TRANSFER_IN,
+        OperationType.CONVERSION_IN,
+        OperationType.INTEREST,
+        OperationType.CREDIT_DISBURSEMENT,
+        OperationType.DEPOSIT_CLOSE,
+        OperationType.INVESTMENT_SELL,
+    }
 )
 _CSV_HEADER = (
     "operation_id",

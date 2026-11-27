@@ -1,0 +1,9 @@
+{
+  "status": "filled",
+  "broker_order_id": "BRK-{{randomValue length=12 type='NUMERIC'}}",
+  "ticker": "{{jsonPath request.body '$.ticker'}}",
+  "side": "{{jsonPath request.body '$.side'}}",
+  "quantity": {{jsonPath request.body '$.quantity'}},
+  "price": "{{jsonPath request.body '$.limit_price'}}",
+  "executed_at": "{{now}}"
+}

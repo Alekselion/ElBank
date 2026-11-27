@@ -11,6 +11,8 @@ from elbank.core.exceptions import AuthenticationError, PermissionDeniedError, U
 from elbank.core.security import InvalidTokenError, TokenType, decode_token
 from elbank.db.models import User, UserRole, UserStatus
 from elbank.deps import (
+    BkiClientDep,
+    BrokerClientDep,
     CardProcessorClientDep,
     CbrClientDep,
     DbSessionDep,
@@ -28,8 +30,11 @@ from elbank.services.accounts import AccountService
 from elbank.services.auth import AuthService
 from elbank.services.cards import CardService
 from elbank.services.conversion import ConversionService
+from elbank.services.credits import CreditService
+from elbank.services.deposits import DepositService
 from elbank.services.external_transfers import ExternalTransferService
 from elbank.services.idempotency import IdempotencyGuard
+from elbank.services.investments import InvestmentService
 from elbank.services.kyc import KycService
 from elbank.services.ledger import OutgoingChecks
 from elbank.services.otp import OtpService
@@ -301,6 +306,53 @@ def get_card_service(
 
 
 CardServiceDep = Annotated[CardService, Depends(get_card_service)]
+
+
+def get_credit_service(
+    *,
+    session: DbSessionDep,
+    bki: BkiClientDep,
+    otp: OtpServiceDep,
+    cache: AccountCacheDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> CreditService:
+    return CreditService(
+        session,
+        bki=bki,
+        otp=otp,
+        cache=cache,
+        publisher=publisher,
+        settings=settings.credits,
+        otp_settings=settings.otp,
+    )
+
+
+CreditServiceDep = Annotated[CreditService, Depends(get_credit_service)]
+
+
+def get_deposit_service(
+    session: DbSessionDep,
+    cache: AccountCacheDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> DepositService:
+    return DepositService(session, cache=cache, publisher=publisher, settings=settings.deposits)
+
+
+DepositServiceDep = Annotated[DepositService, Depends(get_deposit_service)]
+
+
+def get_investment_service(
+    session: DbSessionDep,
+    broker: BrokerClientDep,
+    cache: AccountCacheDep,
+    publisher: EventPublisherDep,
+) -> InvestmentService:
+    return InvestmentService(session, broker=broker, cache=cache, publisher=publisher)
+
+
+InvestmentServiceDep = Annotated[InvestmentService, Depends(get_investment_service)]
 
 # Managers and admins: back-office endpoints.
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]

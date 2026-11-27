@@ -22,6 +22,7 @@ NAMING_CONVENTION = {
 MONEY = Numeric(18, 2)
 RATE = Numeric(7, 4)  # annual interest rate in percent, e.g. 12.5000
 EXCHANGE_RATE = Numeric(18, 8)  # currency exchange rate, e.g. 0.01081234
+PRICE = Numeric(18, 4)  # security price, e.g. 0.0245 (amounts stay MONEY)
 
 
 class Base(DeclarativeBase):

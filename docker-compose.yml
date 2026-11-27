@@ -86,6 +86,28 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  # Accrues deposit interest on deposit.interest.tick (POST /api/v1/admin/deposits/accrue).
+  # Safe to scale: deposits are taken with SELECT ... FOR UPDATE SKIP LOCKED.
+  deposit-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-deposits-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port; the process exits (and restarts) on fatal errors
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   # Completes pending transfers after the cancel window and publishes transfer.completed.
   # Safe to scale: due transfers are taken with SELECT ... FOR UPDATE SKIP LOCKED.
   transfers-worker:
@@ -185,6 +207,9 @@ services:
         transfer.completed transfer.failed transfer.reversed
         payment.processed payment.failed
         card.issued card.blocked card.unblocked
+        credit.approved credit.rejected credit.signed credit.closed
+        deposit.opened deposit.closed deposit.interest.tick
+        investment.order.created
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
