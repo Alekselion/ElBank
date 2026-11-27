@@ -95,6 +95,18 @@ class InvalidStateError(AppError):
     default_message = "Operation is not allowed in the current state"
 
 
+class OperationInProgressError(AppError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "OPERATION_IN_PROGRESS"
+    default_message = "A request with this idempotency key is being processed, retry later"
+
+
+class IdempotencyKeyReusedError(AppError):
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "IDEMPOTENCY_KEY_REUSED"
+    default_message = "This idempotency key was already used for a different request"
+
+
 class UnprocessableError(AppError):
     status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     code = "unprocessable"

@@ -86,6 +86,28 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  # Completes pending transfers after the cancel window and publishes transfer.completed.
+  # Safe to scale: due transfers are taken with SELECT ... FOR UPDATE SKIP LOCKED.
+  transfers-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-transfers-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   # ==================================================================== storage
   postgres:
     image: postgres:17-alpine
@@ -160,6 +182,7 @@ services:
         kyc.requested kyc.decided
         account.opened account.closed account.blocked account.unblocked
         statement.requested
+        transfer.completed transfer.failed transfer.reversed
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

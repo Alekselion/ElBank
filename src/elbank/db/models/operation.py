@@ -18,15 +18,20 @@ from elbank.db.models.enums import (
 
 
 class Operation(UUIDMixin, TimestampMixin, Base):
-    """A single posting on an account. A transfer is a transfer_out + transfer_in pair;
-    fees reference the operation they were charged for via ``parent_operation_id``."""
+    """A single posting on an account.
+
+    A transfer is a ``transfer_out`` (the main operation: it carries the initiator and
+    the idempotency key) plus a ``transfer_in`` and a ``fee`` referencing it via
+    ``parent_operation_id``. Compensating postings of a cancelled transfer reference
+    the transfer too, and the posting they compensate via ``reversed_operation_id``.
+    """
 
     __tablename__ = "operations"
     __table_args__ = (
         CheckConstraint("amount > 0", name="amount_positive"),
         CheckConstraint(CURRENCY_CHECK, name="currency_iso4217"),
-        # Idempotent retries: one operation per (account, client-supplied key).
-        UniqueConstraint("account_id", "idempotency_key"),
+        # Idempotent retries: one operation per (initiator, client-supplied key).
+        UniqueConstraint("user_id", "idempotency_key"),
         Index(None, "account_id", "created_at"),  # account statement
         Index(
             None, "status", postgresql_where=text("status IN ('created', 'pending', 'processing')")
@@ -34,6 +39,8 @@ class Operation(UUIDMixin, TimestampMixin, Base):
     )
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    # Who initiated the operation; NULL for postings made by the bank (interest, reversals).
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     type: Mapped[OperationType] = mapped_column(str_enum(OperationType, "operation_type"))
     amount: Mapped[Decimal]
     currency: Mapped[str] = mapped_column(String(3))
@@ -49,8 +56,13 @@ class Operation(UUIDMixin, TimestampMixin, Base):
     parent_operation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("operations.id", ondelete="RESTRICT"), index=True
     )
+    reversed_operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("operations.id", ondelete="RESTRICT")
+    )
 
-    parent: Mapped[Operation | None] = relationship(remote_side="Operation.id", lazy="raise")
+    parent: Mapped[Operation | None] = relationship(
+        remote_side="Operation.id", foreign_keys=[parent_operation_id], lazy="raise"
+    )
 
 
 class TransferTemplate(UUIDMixin, TimestampMixin, Base):

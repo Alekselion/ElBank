@@ -191,6 +191,29 @@ class StatementSettings(_Section):
     consumer_group: str = "elbank-statements"
 
 
+class TransferSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="TRANSFERS_")
+
+    # Fee of an internal transfer: percent of the amount, clamped to [min, max].
+    fee_percent: Decimal = Field(default=Decimal("0.5"), ge=0, le=100)
+    fee_min: Decimal = Field(default=Decimal("10.00"), ge=0, decimal_places=2)
+    fee_max: Decimal = Field(default=Decimal("5000.00"), ge=0, decimal_places=2)
+    # A transfer stays "pending" (and can be cancelled) this long, then it is completed.
+    cancel_window_seconds: int = Field(default=60, ge=0)
+    # Redis lock op_lock:* held while a request with an idempotency key is processed.
+    lock_ttl_seconds: int = Field(default=30, ge=1)
+    # How long a parallel request with the same key waits for the lock before 409.
+    lock_wait_seconds: float = Field(default=5.0, ge=0)
+    finalizer_interval_seconds: float = Field(default=5.0, gt=0)
+    finalizer_batch_size: int = Field(default=100, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _check_fee(self) -> Self:
+        if self.fee_max < self.fee_min:
+            raise ValueError("TRANSFERS_FEE_MAX must be >= TRANSFERS_FEE_MIN")
+        return self
+
+
 class ElasticSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="ELASTIC_")
 
@@ -213,6 +236,7 @@ class Settings(_Section):
     bank: BankSettings = Field(default_factory=BankSettings)
     accounts: AccountSettings = Field(default_factory=AccountSettings)
     statements: StatementSettings = Field(default_factory=StatementSettings)
+    transfers: TransferSettings = Field(default_factory=TransferSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)
 
     readiness_timeout_seconds: float = Field(default=2.0, gt=0)

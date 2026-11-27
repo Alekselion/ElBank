@@ -71,7 +71,7 @@ def generate_account_number(
 
 def correspondent_account(bic: str) -> str:
     """The bank's correspondent account at the Bank of Russia, derived from its BIC."""
-    draft = f"{_CORR_ACCOUNT_LEDGER}{_CURRENCY_CODE[Currency.RUB]}0{"0" * 8}{bic[-3:]}"
+    draft = f"{_CORR_ACCOUNT_LEDGER}{_CURRENCY_CODE[Currency.RUB]}0{'0' * 8}{bic[-3:]}"
     return _with_control_key("0" + bic[4:6], draft)
 
 

@@ -26,6 +26,7 @@ from elbank.services.otp import OtpService
 from elbank.services.profile import ProfileService
 from elbank.services.sessions import access_revoked_before
 from elbank.services.statements import StatementJobStore, StatementService
+from elbank.services.transfers import TransferService
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /api/v1/auth/login")
 
@@ -147,6 +148,26 @@ def get_statement_service(
 
 
 StatementServiceDep = Annotated[StatementService, Depends(get_statement_service)]
+
+
+def get_transfer_service(
+    session: DbSessionDep,
+    redis: RedisDep,
+    publisher: EventPublisherDep,
+    settings: SettingsDep,
+) -> TransferService:
+    cache = AccountListCache(redis, settings.accounts.list_cache_ttl_seconds)
+    return TransferService(
+        session,
+        redis,
+        cache=cache,
+        publisher=publisher,
+        settings=settings.transfers,
+        account_settings=settings.accounts,
+    )
+
+
+TransferServiceDep = Annotated[TransferService, Depends(get_transfer_service)]
 
 # Managers and admins: back-office endpoints.
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]

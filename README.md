@@ -69,8 +69,8 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`
-и `statement-worker` (консьюмер `statement.requested`).
+Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`,
+`statement-worker` (консьюмер `statement.requested`) и `transfers-worker` (завершение переводов).
 Сервис `kibana-setup` создаёт в Kibana data view `elbank-logs-*` и завершается.
 
 Порты по умолчанию (переопределяются в `.env`):
@@ -188,7 +188,44 @@ Redis не ломает `GET /` — ответ берётся из БД.
 `elbank-app`) и раз в час удаляет файлы старше TTL. Период — целые дни UTC, не больше
 `STATEMENTS_MAX_PERIOD_DAYS`, `to` не в будущем. Если Kafka недоступна, задача не создаётся (`503`).
 
-Локально воркер запускается отдельно: `uv run elbank-statements-worker`.
+Локально воркеры запускаются отдельно: `uv run elbank-statements-worker`, `uv run elbank-transfers-worker`.
+
+## Переводы
+
+`/api/v1/transfers` — переводы между счетами банка (своими и чужими).
+
+| Метод и путь                  | Назначение                                                        |
+|-------------------------------|-------------------------------------------------------------------|
+| `POST /internal`              | `{from_account_id, to_account_id, amount, currency, description, idempotency_key}` |
+| `GET /{operation_id}`         | статус перевода                                                   |
+| `POST /{operation_id}/cancel` | отмена `pending`-перевода в окне отмены → `transfer.reversed`     |
+
+Жизненный цикл:
+
+1. `POST /internal` в одной транзакции блокирует оба счёта (`SELECT ... FOR UPDATE` в порядке id),
+   проверяет статусы, баланс (`amount + комиссия`) и лимиты, списывает `amount + комиссия`, зачисляет
+   `amount` и создаёт три операции в статусе `pending`: `transfer_out` (это и есть `operation_id`),
+   `transfer_in` и `fee`. Комиссия — 0,5 %, минимум 10, максимум 5000 (`TRANSFERS_FEE_*`).
+2. `TRANSFERS_CANCEL_WINDOW_SECONDS` (60 с) перевод можно отменить: создаются обратные операции
+   (`reversed_operation_id`), деньги возвращаются, исходные операции становятся `cancelled`.
+   Если получатель уже потратил деньги, будет `409`.
+3. Затем `elbank-transfers-worker` переводит операции `pending → processing → completed` и публикует
+   `transfer.completed`.
+
+Если не прошла бизнес-проверка, перевод сохраняется со `status=failed` и `error_code`
+(`ACCOUNT_NOT_ACTIVE`, `RECIPIENT_ACCOUNT_NOT_ACTIVE`, `INSUFFICIENT_FUNDS`, `DAILY_LIMIT_EXCEEDED`,
+`MONTHLY_LIMIT_EXCEEDED`), публикуется `transfer.failed`. Ответ — `201`, повторить можно только с
+новым ключом. Лимиты считаются по исходящим `transfer_out`/`payment` за текущие сутки/месяц UTC;
+комиссия и отменённые переводы в лимит не входят.
+
+Идемпотентность: `idempotency_key` уникален для пары (пользователь, ключ). Повтор с тем же ключом
+возвращает сохранённую операцию с кодом `200`; тот же ключ с другими параметрами — `422
+IDEMPOTENCY_KEY_REUSED`. Пока запрос обрабатывается, в Redis висит `op_lock:{user_id}:{key}`
+(TTL 30 с). Параллельный запрос ждёт до `TRANSFERS_LOCK_WAIT_SECONDS`, а затем получает результат
+или `409 OPERATION_IN_PROGRESS`. Если Redis недоступен, дубли всё равно отсекает уникальный индекс в БД.
+
+Все смены статусов операций проходят через `services/operation_service.py` (state machine:
+`created → pending → processing → completed`, `failed`/`cancelled` — из незавершённых статусов).
 
 ## Логи
 
