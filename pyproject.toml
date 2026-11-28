@@ -11,6 +11,7 @@ dependencies = [
     "aiokafka>=0.15.0",
     "alembic>=1.20.1",
     "asyncpg>=0.32.0",
+    "elasticsearch>=8.17,<9",
     "email-validator>=2.4.0",
     "fastapi>=0.165.0",
     "fpdf2>=2.9",
@@ -34,6 +35,8 @@ elbank-deposits-worker = "elbank.workers.deposits:main"
 elbank-exports-worker = "elbank.workers.exports:main"
 elbank-notifications-worker = "elbank.workers.notifications:main"
 elbank-operations-worker = "elbank.workers.operations:main"
+elbank-reconciliation-worker = "elbank.workers.reconciliation:main"
+elbank-set-role = "elbank.cli:set_role_main"
 elbank-statements-worker = "elbank.workers.statements:main"
 elbank-transfers-worker = "elbank.workers.transfers:main"
 

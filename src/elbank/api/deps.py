@@ -24,13 +24,16 @@ from elbank.deps import (
     InterbankClientDep,
     ProviderClientDep,
     RedisDep,
+    ResourcesDep,
     SbpClientDep,
     SettingsDep,
     SmsClientDep,
 )
 from elbank.services.account_cache import AccountListCache
 from elbank.services.accounts import AccountService
+from elbank.services.admin_users import AdminUserService
 from elbank.services.analytics import AnalyticsCache, AnalyticsService
+from elbank.services.audit_search import AuditSearchService
 from elbank.services.auth import AuthService
 from elbank.services.budgets import BudgetAlerts, BudgetService
 from elbank.services.cards import CardService
@@ -40,6 +43,7 @@ from elbank.services.deposits import DepositService
 from elbank.services.exports import ExportJobStore, ExportService
 from elbank.services.external_transfers import ExternalTransferService
 from elbank.services.faq import FaqService
+from elbank.services.fraud import FraudRuleService
 from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.investments import InvestmentService
 from elbank.services.kyc import KycService
@@ -50,9 +54,11 @@ from elbank.services.otp import OtpService
 from elbank.services.payments import PaymentService, TemplateService
 from elbank.services.profile import ProfileService
 from elbank.services.rates import RatesService
+from elbank.services.reconciliation import ReconciliationService
 from elbank.services.sessions import access_revoked_before
 from elbank.services.statements import StatementJobStore, StatementService
 from elbank.services.support import TicketService
+from elbank.services.tariffs import TariffService
 from elbank.services.transfers import TransferService
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /api/v1/auth/login")
@@ -208,11 +214,19 @@ def get_outgoing_checks(session: DbSessionDep, settings: SettingsDep) -> Outgoin
 OutgoingChecksDep = Annotated[OutgoingChecks, Depends(get_outgoing_checks)]
 
 
+def get_tariff_service(session: DbSessionDep, settings: SettingsDep) -> TariffService:
+    return TariffService(session, settings.transfers)
+
+
+TariffServiceDep = Annotated[TariffService, Depends(get_tariff_service)]
+
+
 def get_transfer_service(
     *,
     session: DbSessionDep,
     guard: IdempotencyGuardDep,
     checks: OutgoingChecksDep,
+    tariffs: TariffServiceDep,
     cache: AccountCacheDep,
     publisher: EventPublisherDep,
     settings: SettingsDep,
@@ -221,6 +235,7 @@ def get_transfer_service(
         session,
         guard,
         checks,
+        tariffs=tariffs,
         cache=cache,
         publisher=publisher,
         settings=settings.transfers,
@@ -259,8 +274,10 @@ ExternalTransferServiceDep = Annotated[
 ]
 
 
-def get_rates_service(redis: RedisDep, cbr: CbrClientDep, settings: SettingsDep) -> RatesService:
-    return RatesService(redis, cbr, settings.cbr)
+def get_rates_service(
+    session: DbSessionDep, redis: RedisDep, cbr: CbrClientDep, settings: SettingsDep
+) -> RatesService:
+    return RatesService(session, redis, cbr, settings.cbr)
 
 
 RatesServiceDep = Annotated[RatesService, Depends(get_rates_service)]
@@ -272,6 +289,7 @@ def get_conversion_service(
     guard: IdempotencyGuardDep,
     checks: OutgoingChecksDep,
     rates: RatesServiceDep,
+    tariffs: TariffServiceDep,
     cache: AccountCacheDep,
     publisher: EventPublisherDep,
     settings: SettingsDep,
@@ -281,6 +299,7 @@ def get_conversion_service(
         guard,
         checks,
         rates=rates,
+        tariffs=tariffs,
         cache=cache,
         publisher=publisher,
         settings=settings.transfers,
@@ -372,8 +391,16 @@ def get_investment_service(
 
 InvestmentServiceDep = Annotated[InvestmentService, Depends(get_investment_service)]
 
-# Managers and admins: back-office endpoints.
+# Back-office role checks (see /api/v1/admin/* in the README for the full matrix).
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]
+AdminUserDep = Annotated[User, Depends(require_roles(UserRole.ADMIN))]
+AuditorUserDep = Annotated[User, Depends(require_roles(UserRole.AUDITOR))]
+# Read-only back-office views: staff plus the auditor.
+BackOfficeReaderDep = Annotated[
+    User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN, UserRole.AUDITOR))
+]
+# Reconciliation: run by an admin or the auditor.
+ReconcilerUserDep = Annotated[User, Depends(require_roles(UserRole.ADMIN, UserRole.AUDITOR))]
 
 
 def get_operation_history_service(session: DbSessionDep) -> OperationHistoryService:
@@ -435,3 +462,35 @@ def get_notification_service(session: DbSessionDep) -> NotificationService:
 
 
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
+
+
+def get_admin_user_service(
+    session: DbSessionDep, redis: RedisDep, publisher: EventPublisherDep, settings: SettingsDep
+) -> AdminUserService:
+    return AdminUserService(session, redis, publisher, settings.jwt)
+
+
+AdminUserServiceDep = Annotated[AdminUserService, Depends(get_admin_user_service)]
+
+
+def get_fraud_rule_service(session: DbSessionDep) -> FraudRuleService:
+    return FraudRuleService(session)
+
+
+FraudRuleServiceDep = Annotated[FraudRuleService, Depends(get_fraud_rule_service)]
+
+
+def get_audit_search_service(resources: ResourcesDep, settings: SettingsDep) -> AuditSearchService:
+    return AuditSearchService(resources.elastic, settings.elastic)
+
+
+AuditSearchServiceDep = Annotated[AuditSearchService, Depends(get_audit_search_service)]
+
+
+def get_reconciliation_service(
+    session: DbSessionDep, publisher: EventPublisherDep, settings: SettingsDep
+) -> ReconciliationService:
+    return ReconciliationService(session, publisher, settings.reconciliation)
+
+
+ReconciliationServiceDep = Annotated[ReconciliationService, Depends(get_reconciliation_service)]

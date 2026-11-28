@@ -9,7 +9,9 @@ from enum import StrEnum
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from elbank.core.audit import audit
 from elbank.core.config import AccountSettings
+from elbank.core.logging import get_logger
 from elbank.db.models import (
     Account,
     AccountLimit,
@@ -18,6 +20,9 @@ from elbank.db.models import (
     OperationStatus,
     OperationType,
 )
+from elbank.services.fraud import FraudChecker
+
+logger = get_logger(__name__)
 
 CENT = Decimal("0.01")
 
@@ -41,6 +46,7 @@ class TransferErrorCode(StrEnum):
     INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
     DAILY_LIMIT_EXCEEDED = "DAILY_LIMIT_EXCEEDED"
     MONTHLY_LIMIT_EXCEEDED = "MONTHLY_LIMIT_EXCEEDED"
+    FRAUD_SUSPECTED = "FRAUD_SUSPECTED"
     EXTERNAL_REJECTED = "EXTERNAL_REJECTED"
     EXTERNAL_TIMEOUT = "EXTERNAL_TIMEOUT"
     EXTERNAL_UNAVAILABLE = "EXTERNAL_UNAVAILABLE"
@@ -78,11 +84,16 @@ async def child_postings(session: AsyncSession, parent_ids: Sequence[uuid.UUID])
 
 
 class OutgoingChecks:
-    """Business checks of a debit; a failure is stored as a failed operation, not raised."""
+    """Business checks of a debit; a failure is stored as a failed operation, not raised.
+
+    Order: account statuses, balance, outgoing limits, anti-fraud rules
+    (:mod:`elbank.services.fraud`).
+    """
 
     def __init__(self, session: AsyncSession, settings: AccountSettings) -> None:
         self._session = session
         self._settings = settings
+        self._fraud = FraudChecker(session)
 
     async def check(
         self,
@@ -90,6 +101,7 @@ class OutgoingChecks:
         amount: Decimal,
         fee: Decimal,
         *,
+        operation: OperationType,
         target: Account | None = None,
         apply_limits: bool = True,
     ) -> TransferErrorCode | None:
@@ -100,16 +112,56 @@ class OutgoingChecks:
             return TransferErrorCode.RECIPIENT_ACCOUNT_NOT_ACTIVE
         if source.balance < amount + fee:
             return TransferErrorCode.INSUFFICIENT_FUNDS
-        return await self._check_limits(source, amount) if apply_limits else None
+        spent_today: Decimal | None = None
+        if apply_limits:
+            spent_today, spent_this_month = await self._spent(source)
+            if error := await self._check_limits(source, amount, spent_today, spent_this_month):
+                return error
+        return await self._check_fraud(source, amount, fee, operation, spent_today)
 
-    async def _check_limits(self, source: Account, amount: Decimal) -> TransferErrorCode | None:
+    async def _check_limits(
+        self, source: Account, amount: Decimal, spent_today: Decimal, spent_this_month: Decimal
+    ) -> TransferErrorCode | None:
         daily_limit, monthly_limit = await self._limits(source)
-        spent_today, spent_this_month = await self._spent(source)
         if spent_today + amount > daily_limit:
             return TransferErrorCode.DAILY_LIMIT_EXCEEDED
         if spent_this_month + amount > monthly_limit:
             return TransferErrorCode.MONTHLY_LIMIT_EXCEEDED
         return None
+
+    async def _check_fraud(
+        self,
+        source: Account,
+        amount: Decimal,
+        fee: Decimal,
+        operation: OperationType,
+        spent_today: Decimal | None,
+    ) -> TransferErrorCode | None:
+        hit = await self._fraud.first_hit(source, amount, fee, operation, spent_today=spent_today)
+        if hit is None:
+            return None
+        logger.warning(
+            "operation blocked by fraud rule",
+            account_id=str(source.id),
+            rule=hit.rule_name,
+            operation=operation.value,
+            amount=str(amount),
+        )
+        audit(
+            "fraud.operation_blocked",
+            actor_id=source.user_id,
+            user_id=source.user_id,
+            entity="account",
+            entity_id=source.id,
+            details={
+                "rule_id": hit.rule_id,
+                "rule": hit.rule_name,
+                "operation": operation.value,
+                "amount": amount,
+                "currency": source.currency,
+            },
+        )
+        return TransferErrorCode.FRAUD_SUSPECTED
 
     async def _limits(self, account: Account) -> tuple[Decimal, Decimal]:
         limit = await self._session.scalar(

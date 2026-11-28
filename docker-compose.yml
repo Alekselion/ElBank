@@ -16,6 +16,7 @@ x-app-env: &app-env
   STATEMENTS_DIR: /app/uploads/statements
   EXPORTS_DIR: /app/uploads/exports
   SUPPORT_UPLOADS_DIR: /app/uploads/support
+  RECONCILIATION_DIR: /app/uploads/recon
 
 services:
   # ================================================================ application
@@ -185,6 +186,30 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  # Kafka consumer of reconciliation.requested: checks the ledger of a period and writes
+  # a JSON report to the shared uploads volume (/app/uploads/recon), served by elbank-app.
+  reconciliation-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-reconciliation-worker"]
+    volumes:
+      - kyc_uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port; the process exits (and restarts) on fatal errors
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   # Completes pending transfers after the cancel window and publishes transfer.completed
   # (and operation.completed for every completed posting).
   # Safe to scale: due transfers are taken with SELECT ... FOR UPDATE SKIP LOCKED.
@@ -280,7 +305,8 @@ services:
     image: apache/kafka:4.1.0
     environment:
       TOPICS: >-
-        user.registered user.deleted profile.updated notification.send
+        user.registered user.deleted user.blocked user.unblocked
+        profile.updated notification.send
         kyc.requested kyc.decided
         account.opened account.closed account.blocked account.unblocked
         statement.requested export.requested operation.completed
@@ -291,6 +317,7 @@ services:
         deposit.opened deposit.closed deposit.interest.tick
         investment.order.created
         ticket.created ticket.updated
+        reconciliation.requested
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -371,6 +398,7 @@ services:
       - "5000:5000"
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/templates:/usr/share/logstash/templates:ro
       - ls_data:/usr/share/logstash/data
     depends_on:
       elasticsearch:
@@ -400,7 +428,7 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # One-shot: create the "elbank-logs-*" data view so logs are visible in Discover.
+  # One-shot: create the "elbank-logs-*" and "elbank-audit-*" data views for Discover.
   kibana-setup:
     image: docker.elastic.co/elasticsearch/elasticsearch:${ELK_VERSION:-8.17.4}
     entrypoint: ["/bin/bash", "-c"]
@@ -413,7 +441,10 @@ services:
         curl -fsS -X POST http://kibana:5601/api/data_views/default \
           -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
           -d '{"data_view_id": "elbank-logs", "force": true}' > /dev/null
-        echo "Kibana data view elbank-logs-* is ready"
+        curl -fsS -X POST http://kibana:5601/api/data_views/data_view \
+          -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+          -d '{"override": true, "data_view": {"id": "elbank-audit", "name": "ElBank audit", "title": "elbank-audit-*", "timeFieldName": "@timestamp"}}' > /dev/null
+        echo "Kibana data views elbank-logs-* and elbank-audit-* are ready"
     depends_on:
       kibana:
         condition: service_healthy

@@ -17,6 +17,7 @@ from elbank.core.logging import get_logger, setup_logging
 from elbank.db.session import create_engine, create_session_factory
 from elbank.deps import Resources
 from elbank.kafka import EventPublisher, KafkaProducer
+from elbank.services.audit_search import create_elastic_client
 from elbank.services.operation_events import OperationEventRelay, bind_operation_events
 from elbank.services.ticket_hub import TicketEventHub
 
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
     kafka = KafkaProducer(settings.kafka)
     http = create_http_client(settings.wiremock.base_url, settings.wiremock.timeout_seconds)
+    elastic = create_elastic_client(settings.elastic)
     try:
         await kafka.start()
     except Exception as exc:  # noqa: BLE001 - app must boot; /ready reports Kafka as down
@@ -49,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         kafka=kafka,
         http=http,
         ticket_hub=ticket_hub,
+        elastic=elastic,
     )
     logger.info("application started", version=__version__)
     try:
@@ -58,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await relay.drain(_EVENT_DRAIN_SECONDS)
         await kafka.stop()
         await http.aclose()
+        await elastic.close()
         await redis.aclose()
         await engine.dispose()
         logger.info("application stopped")

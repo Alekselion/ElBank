@@ -72,9 +72,10 @@ docker compose ps
 Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`,
 `statement-worker` (консьюмер `statement.requested`), `exports-worker` (консьюмер `export.requested`),
 `operations-worker` (консьюмер `operation.completed`: кэш аналитики и бюджеты), `notifications-worker`
-(консьюмер `notification.send`), `deposit-worker` и
-`transfers-worker` (завершение переводов, разбор таймаутов внешних переводов и платежей).
-Сервис `kibana-setup` создаёт в Kibana data view `elbank-logs-*` и завершается.
+(консьюмер `notification.send`), `reconciliation-worker` (консьюмер `reconciliation.requested`),
+`deposit-worker` и `transfers-worker` (завершение переводов, разбор таймаутов внешних переводов
+и платежей). Сервис `kibana-setup` создаёт в Kibana data views `elbank-logs-*` и `elbank-audit-*`
+и завершается.
 
 Порты по умолчанию (переопределяются в `.env`):
 
@@ -217,7 +218,8 @@ Redis не ломает `GET /` — ответ берётся из БД.
 1. `POST /internal` в одной транзакции блокирует оба счёта (`SELECT ... FOR UPDATE` в порядке id),
    проверяет статусы, баланс (`amount + комиссия`) и лимиты, списывает `amount + комиссия`, зачисляет
    `amount` и создаёт три операции в статусе `pending`: `transfer_out` (это и есть `operation_id`),
-   `transfer_in` и `fee`. Комиссия — 0,5 %, минимум 10, максимум 5000 (`TRANSFERS_FEE_*`).
+   `transfer_in` и `fee`. Комиссия — по тарифу `internal_transfer` (по умолчанию 0,5 %, минимум 10,
+   максимум 5000 — `TRANSFERS_FEE_*`; меняется через `PUT /api/v1/admin/tariffs`).
 2. `TRANSFERS_CANCEL_WINDOW_SECONDS` (60 с) перевод можно отменить: создаются обратные операции
    (`reversed_operation_id`), деньги возвращаются, исходные операции становятся `cancelled`.
    Если получатель уже потратил деньги, будет `409`.
@@ -226,7 +228,7 @@ Redis не ломает `GET /` — ответ берётся из БД.
 
 Если не прошла бизнес-проверка, перевод сохраняется со `status=failed` и `error_code`
 (`ACCOUNT_NOT_ACTIVE`, `RECIPIENT_ACCOUNT_NOT_ACTIVE`, `INSUFFICIENT_FUNDS`, `DAILY_LIMIT_EXCEEDED`,
-`MONTHLY_LIMIT_EXCEEDED`), публикуется `transfer.failed`. Ответ — `201`, повторить можно только с
+`MONTHLY_LIMIT_EXCEEDED`, `FRAUD_SUSPECTED` — сработало правило антифрода), публикуется `transfer.failed`. Ответ — `201`, повторить можно только с
 новым ключом. Лимиты считаются по исходящим `transfer_out`/`payment` за текущие сутки/месяц UTC;
 комиссия и отменённые переводы в лимит не входят.
 
@@ -266,7 +268,8 @@ IDEMPOTENCY_KEY_REUSED`. Пока запрос обрабатывается, в 
 
 ### Конвертация
 
-Курс — кросс-курс ЦБ из `/rates` (8 знаков), комиссия 1 % (`TRANSFERS_CONVERSION_FEE_PERCENT`) в валюте
+Курс — из `/rates` (8 знаков): ручной курс администратора, если задан, иначе кросс-курс ЦБ.
+Комиссия — по тарифу `conversion` (по умолчанию 1 %, `TRANSFERS_CONVERSION_FEE_PERCENT`) в валюте
 списания. Зачисляется `amount * rate` с округлением вниз до копеек. Всё в одной транзакции:
 `conversion_out` + `conversion_in` + `fee` сразу `completed`, событие `transfer.completed` с
 `type=conversion`. Лимиты не применяются.
@@ -597,6 +600,66 @@ WireMock: `sms_ok.json`, `sms_fail.json` (500 для `+79990000011`), `email_ok.
 - Если Logstash недоступен, приложение работает как обычно: события ждут в памяти
   и досылаются после восстановления (старше 5 минут — отбрасываются).
 - `LOG_JSON=false` включает человекочитаемый вывод в консоль для локальной разработки.
+- Записи аудита (`core/audit.py`, поле `log_type=audit`) Logstash пишет в отдельный индекс
+  `elbank-audit-YYYY.MM.dd` с шаблоном `logstash/templates/elbank-audit.json` (`action`, `actor_id`,
+  `user_id`, `entity`, `entity_id` — keyword, `details` — flattened). Data view «ElBank audit».
+
+## Админ-панель
+
+Все эндпоинты — `/api/v1/admin/*`. Первого администратора назначает CLI (через API роль меняет
+только admin):
+
+```bash
+uv run elbank-set-role --phone +79991234567 --role admin
+# в compose: docker compose run --rm elbank-app elbank-set-role --phone +79991234567 --role admin
+```
+
+| Эндпоинт                                                  | Роли                                  |
+|-----------------------------------------------------------|---------------------------------------|
+| `GET /users?search=&status=&role=&page=&size=`            | manager, admin, auditor               |
+| `POST /users/{id}/block` (`{reason}` необяз.), `/unblock` | manager (только клиентов), admin      |
+| `POST /users/{id}/role` `{role}`                          | admin (свою роль менять нельзя)       |
+| `GET /tariffs`, `GET /rates`, `GET /fraud-rules`          | manager, admin, auditor               |
+| `PUT /tariffs`, `PUT`/`DELETE /rates/{pair}`              | admin                                 |
+| `POST /fraud-rules`, `PUT`/`DELETE /fraud-rules/{id}`     | admin                                 |
+| `GET /audit?user_id=&action=&from=&to=&page=&size=`       | auditor                               |
+| `POST /reconciliation/run`, `GET /reconciliation/{run_id}`| admin, auditor                        |
+
+- **Блокировка.** `status=blocked`, отзываются все refresh- и access-токены (пользователь выходит
+  отовсюду), публикуется `user.blocked`; разблокировка — `user.unblocked`. Себя блокировать нельзя.
+- **Тарифы.** Таблица `tariffs` (`code` → jsonb `{percent, min, max}`), коды `internal_transfer` и
+  `conversion`. Нет строки — действует значение из env (`is_default: true`). Тариф читается при
+  создании операции, поэтому изменение касается только новых операций.
+  `PUT /tariffs` `{"tariffs": {"internal_transfer": {"percent": "0.3", "min": "5.00", "max": "3000.00"}, "conversion": null}}`
+  — меняются только перечисленные; `null` возвращает значение по умолчанию.
+- **Курсы.** `PUT /rates/USD-RUB` `{"rate": "92.5"}` сохраняет ручной курс в `rate_overrides`;
+  обратная пара без своего override считается как `1 / rate`. Ключи Redis `rates:USD:RUB` и
+  `rates:RUB:USD` удаляются сразу, поэтому `/transfers/rates` и конвертации видят новый курс со
+  следующего запроса. `DELETE /rates/{pair}` возвращает курс ЦБ. `GET /rates` — действующие курсы всех
+  пар (`source: cbr | override`) и список override.
+- **Аудит.** Читается из Elasticsearch (`elbank-audit-*`), не из БД. `user_id` ищет и по исполнителю,
+  и по субъекту; `action` — точное значение или префикс со `*` (`admin.user.*`); `from`/`to` — ISO 8601
+  с часовым поясом. Пишутся: `auth.login`, `auth.login_failed`, `admin.user.block|unblock|role_change`,
+  `admin.tariffs.update`, `admin.rate.override|override_removed`, `admin.fraud_rule.create|update|delete`,
+  `admin.reconciliation.run`, `reconciliation.completed`, `fraud.operation_blocked`, `cli.user.role_change`.
+  Elasticsearch недоступен — `503`. Аудит доставляется тем же асинхронным каналом, что и логи: при
+  недоступном Logstash дольше 5 минут записи теряются.
+- **Сверка.** `POST /reconciliation/run` `{"date_from": "...Z", "date_to": "...Z"}` (до
+  `RECONCILIATION_MAX_PERIOD_DAYS`) агрегирует операции периода (кол-во и сумма по
+  тип/статус/валюта), публикует `reconciliation.requested` и отвечает `202` с `run_id` и `report_url`.
+  `reconciliation-worker` в одной транзакции `REPEATABLE READ` перепроверяет: пары `transfer_out`/`transfer_in`,
+  `conversion_out`/`conversion_in` (сумма = `amount * rate` с округлением вниз), статусы комиссий,
+  компенсации отменённых проводок, согласованность платёжных поручений и операций, зависшие операции
+  (`RECONCILIATION_STUCK_AFTER_SECONDS`), отрицательные балансы, а также расхождение итогов с моментом
+  запроса (информационно). Отчёт — `/app/uploads/recon/{run_id}.json`, `status: ok | mismatches`;
+  `GET /reconciliation/{run_id}` отдаёт его (`404`, пока не готов).
+- **Антифрод.** Правило — выражение над исходящей операцией; если оно истинно, операция сохраняется
+  `failed` с `FRAUD_SUSPECTED`, в аудит пишется `fraud.operation_blocked`. Проверяются внутренние,
+  межбанковские и СБП-переводы и платежи (не конвертации). Переменные: `amount`, `fee`, `balance`,
+  `currency`, `operation`, `hour`, `weekday` (UTC), `account_age_days`, `ops_last_hour`, `spent_today`.
+  Синтаксис: литералы, `and/or/not`, сравнения, `in`, `+ - * /`; вызовы, атрибуты и индексы
+  запрещены (разбор через `ast`, без `eval`). Выражение проверяется при сохранении (`422`).
+  Пример: `amount > 300000 and hour < 6`, `operation == "sbp_transfer" and ops_last_hour >= 5`.
 
 ## Миграции
 

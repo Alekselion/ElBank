@@ -232,7 +232,7 @@ class ExternalTransferService:
         if source.currency != Currency.RUB:
             raise UnprocessableError("External transfers are made from RUB accounts only")
 
-        error = await self._checks.check(source, amount, Decimal(0))
+        error = await self._checks.check(source, amount, Decimal(0), operation=type_)
         operation = self._ops.create_pending(
             account_id=source.id,
             user_id=user.id,

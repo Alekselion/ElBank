@@ -1,12 +1,13 @@
 """Currency conversion between own accounts.
 
 ``amount`` is debited from the source account in its currency together with a fee
-of ``TRANSFERS_CONVERSION_FEE_PERCENT``; ``amount * rate`` (rounded down to
-kopecks/cents, in the bank's favour) is credited to the target account. The rate
-is the Bank of Russia cross rate from :class:`RatesService` (same as
-``GET /transfers/rates``). Everything happens in one DB transaction with both
-accounts locked; the operations ``conversion_out`` (main), ``conversion_in`` and
-``fee`` go ``pending → processing → completed`` and ``transfer.completed`` with
+from the ``conversion`` tariff (default ``TRANSFERS_CONVERSION_FEE_PERCENT``);
+``amount * rate`` (rounded down to kopecks/cents, in the bank's favour) is credited
+to the target account. The rate comes from :class:`RatesService`: an admin override
+or the Bank of Russia cross rate (same as ``GET /transfers/rates``). Everything
+happens in one DB transaction with both accounts locked; the operations
+``conversion_out`` (main), ``conversion_in`` and ``fee`` go
+``pending → processing → completed`` and ``transfer.completed`` with
 ``type=conversion`` is published. A failed check (status, balance) stores a
 ``failed`` operation and publishes ``transfer.failed``. Outgoing limits do not
 apply: the money stays with the client.
@@ -21,14 +22,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from elbank.core.config import TransferSettings
 from elbank.core.exceptions import IdempotencyKeyReusedError, NotFoundError, UnprocessableError
 from elbank.core.logging import get_logger
-from elbank.db.models import Account, Currency, Operation, OperationType, User
+from elbank.db.models import Account, Currency, Operation, OperationType, TariffCode, User
 from elbank.kafka import EventPublisher, EventType
 from elbank.schemas.transfer import TransferChannel
 from elbank.services.account_cache import AccountListCache
 from elbank.services.idempotency import IdempotencyGuard
-from elbank.services.ledger import CENT, OutgoingChecks, lock_accounts, percent_of
+from elbank.services.ledger import CENT, OutgoingChecks, lock_accounts
 from elbank.services.operation_service import OperationService
 from elbank.services.rates import RatesService
+from elbank.services.tariffs import TariffService
 from elbank.services.transfer_views import (
     TransferResult,
     TransferView,
@@ -56,6 +58,7 @@ class ConversionService:
         checks: OutgoingChecks,
         *,
         rates: RatesService,
+        tariffs: TariffService,
         cache: AccountListCache,
         publisher: EventPublisher,
         settings: TransferSettings,
@@ -64,6 +67,7 @@ class ConversionService:
         self._guard = guard
         self._checks = checks
         self._rates = rates
+        self._tariffs = tariffs
         self._cache = cache
         self._publisher = publisher
         self._settings = settings
@@ -100,14 +104,20 @@ class ConversionService:
             raise UnprocessableError("Accounts have the same currency: use /internal")
         rate = await self._rates.get_rate(Currency(source.currency), Currency(target.currency))
 
+        fee_rule = await self._tariffs.fee_rule(TariffCode.CONVERSION)
         source, target = await self._own_accounts(request, lock=True)
-        fee = percent_of(request.amount, self._settings.conversion_fee_percent)
+        fee = fee_rule.fee(request.amount)
         converted = (request.amount * rate.rate).quantize(CENT, rounding=ROUND_DOWN)
         if converted <= 0:
             raise UnprocessableError("Amount is too small to convert")
 
         error = await self._checks.check(
-            source, request.amount, fee, target=target, apply_limits=False
+            source,
+            request.amount,
+            fee,
+            operation=OperationType.CONVERSION_OUT,
+            target=target,
+            apply_limits=False,
         )
         main = self._ops.create_pending(
             account_id=source.id,

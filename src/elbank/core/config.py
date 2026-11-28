@@ -418,6 +418,22 @@ class ElasticSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="ELASTIC_")
 
     url: str = "http://localhost:9200"
+    # Audit trail written by Logstash (log_type=audit), read by GET /api/v1/admin/audit.
+    audit_index_pattern: str = "elbank-audit-*"
+    timeout_seconds: float = Field(default=5.0, gt=0)
+
+
+class ReconciliationSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="RECONCILIATION_")
+
+    # JSON reports; /app/uploads/recon in docker-compose (shared by app and worker).
+    dir: Path = Path("uploads/recon")
+    max_period_days: int = Field(default=366, ge=1)
+    # Operations still created/pending/processing this long after creation are reported.
+    stuck_after_seconds: int = Field(default=3600, ge=60)
+    # Mismatches listed per check (the count is always exact).
+    max_issues_per_check: int = Field(default=500, ge=1, le=10000)
+    consumer_group: str = "elbank-reconciliation"
 
 
 class Settings(_Section):
@@ -455,6 +471,7 @@ class Settings(_Section):
     )
     transfers: TransferSettings = Field(default_factory=TransferSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)
+    reconciliation: ReconciliationSettings = Field(default_factory=ReconciliationSettings)
 
     readiness_timeout_seconds: float = Field(default=2.0, gt=0)
 

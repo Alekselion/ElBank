@@ -176,6 +176,13 @@ class TicketPriority(StrEnum):
     URGENT = "urgent"
 
 
+class TariffCode(StrEnum):
+    """Operations with a configurable fee (see :mod:`elbank.services.tariffs`)."""
+
+    INTERNAL_TRANSFER = "internal_transfer"
+    CONVERSION = "conversion"
+
+
 class NotificationChannel(StrEnum):
     EMAIL = "email"
     SMS = "sms"

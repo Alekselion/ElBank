@@ -32,7 +32,15 @@ from elbank.core.exceptions import (
     UnprocessableError,
 )
 from elbank.core.logging import get_logger
-from elbank.db.models import Account, Currency, Operation, OperationStatus, OperationType, User
+from elbank.db.models import (
+    Account,
+    Currency,
+    Operation,
+    OperationStatus,
+    OperationType,
+    TariffCode,
+    User,
+)
 from elbank.kafka import EventPublisher, EventType
 from elbank.schemas.transfer import TransferChannel
 from elbank.services.account_cache import AccountListCache
@@ -41,9 +49,9 @@ from elbank.services.ledger import (
     OutgoingChecks,
     child_postings,
     lock_accounts,
-    percent_of,
 )
 from elbank.services.operation_service import CANCELLABLE_STATUSES, OperationService
+from elbank.services.tariffs import TariffService
 from elbank.services.transfer_views import (
     TransferResult,
     TransferView,
@@ -61,11 +69,6 @@ _REVERSAL_TYPE: dict[OperationType, OperationType] = {
     OperationType.TRANSFER_IN: OperationType.TRANSFER_OUT,
     OperationType.FEE: OperationType.TRANSFER_IN,  # fee refund
 }
-
-
-def calculate_fee(amount: Decimal, settings: TransferSettings) -> Decimal:
-    """``fee_percent`` of the amount rounded half-up to kopecks, clamped to [min, max]."""
-    return min(max(percent_of(amount, settings.fee_percent), settings.fee_min), settings.fee_max)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +89,7 @@ class TransferService:
         guard: IdempotencyGuard,
         checks: OutgoingChecks,
         *,
+        tariffs: TariffService,
         cache: AccountListCache,
         publisher: EventPublisher,
         settings: TransferSettings,
@@ -93,6 +97,7 @@ class TransferService:
         self._session = session
         self._guard = guard
         self._checks = checks
+        self._tariffs = tariffs
         self._cache = cache
         self._publisher = publisher
         self._settings = settings
@@ -134,8 +139,10 @@ class TransferService:
         if source.currency != request.currency or target.currency != request.currency:
             raise UnprocessableError("Transfer currency must match both accounts' currency")
 
-        fee = calculate_fee(request.amount, self._settings)
-        error = await self._checks.check(source, request.amount, fee, target=target)
+        fee = (await self._tariffs.fee_rule(TariffCode.INTERNAL_TRANSFER)).fee(request.amount)
+        error = await self._checks.check(
+            source, request.amount, fee, operation=OperationType.TRANSFER_OUT, target=target
+        )
         transfer = self._ops.create_pending(
             account_id=source.id,
             user_id=request.user.id,

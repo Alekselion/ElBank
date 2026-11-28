@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from elbank.clients.sms import mask_phone
+from elbank.core.audit import audit
 from elbank.core.config import Settings
 from elbank.core.exceptions import (
     AuthenticationError,
@@ -105,6 +106,14 @@ class AuthService:
             raise InvalidCredentialsError
         if not verify_password(password, user.password_hash):
             logger.info("login failed: wrong password", user_id=str(user.id))
+            audit(
+                "auth.login_failed",
+                actor_id=user.id,
+                user_id=user.id,
+                entity="user",
+                entity_id=user.id,
+                details={"reason": "wrong_password"},
+            )
             raise InvalidCredentialsError
         self._ensure_active(user)
 
@@ -116,6 +125,7 @@ class AuthService:
         pair = self._sessions.issue_pair(user)
         await self._session.commit()
         logger.info("user logged in", user_id=str(user.id))
+        audit("auth.login", actor_id=user.id, user_id=user.id, entity="user", entity_id=user.id)
         return pair
 
     async def refresh(self, refresh_token: str) -> TokenPair:

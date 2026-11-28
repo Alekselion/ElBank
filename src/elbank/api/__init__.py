@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from elbank.api.routes import (
     accounts,
+    admin,
     analytics,
     auth,
     budgets,
@@ -43,5 +44,6 @@ api_router.include_router(support.router, prefix="/api/v1/support/tickets")
 api_router.include_router(support.faq_router, prefix="/api/v1/support/faq")
 api_router.include_router(support_ws.router)
 api_router.include_router(notifications.router, prefix="/api/v1/notifications")
+api_router.include_router(admin.router, prefix="/api/v1/admin")
 
 __all__ = ["api_router"]

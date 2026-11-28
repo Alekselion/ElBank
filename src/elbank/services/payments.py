@@ -204,7 +204,9 @@ class PaymentService:
         if account.currency != Currency.RUB:
             raise UnprocessableError("Payments are made from RUB accounts only")
 
-        error = await self._checks.check(account, request.amount, Decimal(0))
+        error = await self._checks.check(
+            account, request.amount, Decimal(0), operation=OperationType.PAYMENT
+        )
         operation = self._ops.create_pending(
             account_id=account.id,
             user_id=request.user.id,

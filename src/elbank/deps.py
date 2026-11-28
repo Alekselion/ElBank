@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Annotated, cast
 
 import httpx
+from elasticsearch import AsyncElasticsearch
 from fastapi import Depends, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -38,6 +39,7 @@ class Resources:
     kafka: KafkaProducer
     http: httpx.AsyncClient  # WireMock-backed external services
     ticket_hub: TicketEventHub  # ticket.updated fan-out to WebSockets
+    elastic: AsyncElasticsearch  # audit trail reads (elbank-audit-*)
 
 
 def get_resources(request: Request) -> Resources:

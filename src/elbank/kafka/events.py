@@ -27,6 +27,8 @@ logger = get_logger(__name__)
 class EventType(StrEnum):
     USER_REGISTERED = "user.registered"
     USER_DELETED = "user.deleted"
+    USER_BLOCKED = "user.blocked"
+    USER_UNBLOCKED = "user.unblocked"
     PROFILE_UPDATED = "profile.updated"
     NOTIFICATION_SEND = "notification.send"
     KYC_REQUESTED = "kyc.requested"
@@ -56,6 +58,7 @@ class EventType(StrEnum):
     INVESTMENT_ORDER_CREATED = "investment.order.created"
     TICKET_CREATED = "ticket.created"
     TICKET_UPDATED = "ticket.updated"
+    RECONCILIATION_REQUESTED = "reconciliation.requested"
 
 
 class EventEnvelope(BaseModel):
