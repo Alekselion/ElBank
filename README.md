@@ -1,25 +1,256 @@
 # ElBank
 
-Эмулятор электронного банка (pet-проект).
+Эмулятор электронного банка (pet-проект): регистрация и KYC, счета, переводы (внутренние, межбанк,
+СБП, конвертация), платежи, карты, кредиты, вклады, инвестиции, история и аналитика, поддержка,
+уведомления, админ-панель, сквозной аудит и антифрод. Внешние системы (Госуслуги, ЦБ, БКИ, СБП,
+шлюзы SMS/e-mail/push, провайдеры услуг, брокер, процессинг карт) — моки WireMock.
 
-**Стек:** Python 3.15, uv, FastAPI, SQLAlchemy 2 (async) + asyncpg, Alembic, Pydantic v2,
-Redis, Kafka (aiokafka), httpx, WireMock, ELK, PostgreSQL, Docker.
+**Стек:** Python 3.15, uv, FastAPI, SQLAlchemy 2 (async) + asyncpg, Alembic, Pydantic v2 +
+pydantic-settings, Redis, Kafka (aiokafka), httpx, WireMock, ELK (Elasticsearch + Logstash + Kibana),
+PostgreSQL, Docker + docker-compose.
+
+## Архитектура
+
+```
+                         HTTP / WebSocket (JWT)
+   client ──────────────────────────────────────┐
+                                                 ▼
+                ┌────────────────────────────────────────────────────┐
+                │ elbank-app (FastAPI, uvicorn)                      │
+                │  middleware: correlation id · audit · PII masking  │──── httpx ───► WireMock :8081
+                │  routes → services → SQLAlchemy (async)            │   Госуслуги, ЦБ, БКИ, СБП,
+                └──┬──────────────┬───────────────┬──────────────────┘   межбанк, провайдеры, SMS…
+                   │              │               │ domain events + audit.event
+          asyncpg  │      redis-py│               ▼
+                   ▼              ▼        ┌──────────────┐
+             ┌──────────┐   ┌──────────┐   │    Kafka     │  topic = event type
+             │PostgreSQL│   │  Redis   │   │  (KRaft)     │  (kafka-init creates them)
+             └──────────┘   └──────────┘   └──────┬───────┘
+                   ▲              ▲               │ consumer groups
+                   │              │      ┌────────┴──────────────────────────────────────┐
+                   └──────────────┴──────┤ workers (same image, other command)           │
+                                         │  transfers · operations · notifications ·     │── httpx ──► WireMock
+                                         │  statements · exports · deposits ·            │
+                                         │  reconciliation (→ /app/uploads/recon)        │
+                                         │  audit ── elasticsearch-py ───────────┐       │
+                                         └───────────────────────────────────────┼───────┘
+   every process: JSON logs ── python-logstash-async (TCP) ──► Logstash :5000     │
+                                                                  │              ▼
+                                                                  └──► Elasticsearch :9200 ◄── Kibana :5601
+                                                     elbank-logs-YYYY.MM.dd   elbank-audit-YYYY.MM.DD
+```
+
+- **Синхронная часть** — `elbank-app`: валидация, бизнес-проверки и проводки в одной транзакции
+  PostgreSQL; Redis — кэши (счета, курсы, аналитика, FAQ), OTP, rate limit, блокировки идемпотентности.
+- **Асинхронная часть** — доменные события в Kafka (`transfer.completed`, `notification.send`, …) и
+  воркеры-консьюмеры; доставка at-least-once, обработчики идемпотентны.
+- **Наблюдаемость** — логи (с маскированием PII) через Logstash в `elbank-logs-*`; аудит отдельным
+  потоком `audit.event` → `audit-worker` → `elbank-audit-*`; сквозной `X-Correlation-Id`.
+
+## Сервисы и порты
+
+| Сервис                | Порт на хосте (по умолчанию) | Переменная `.env`    | Назначение                                  |
+|-----------------------|------------------------------|----------------------|---------------------------------------------|
+| elbank-app            | 8000 (`/docs` — Swagger)     | `APP_PORT`           | API                                         |
+| postgres              | 5432                         | `POSTGRES_PORT`      | основная БД                                 |
+| redis                 | 6379                         | `REDIS_HOST_PORT`    | кэши, OTP, блокировки                       |
+| kafka                 | 29092 (в сети compose — 9092)| `KAFKA_HOST_PORT`    | события                                     |
+| kafka-ui              | 8080                         | `KAFKA_UI_HOST_PORT` | просмотр топиков                            |
+| wiremock              | 8081                         | `WIREMOCK_HOST_PORT` | моки внешних API                            |
+| elasticsearch         | 9200                         | —                    | логи и аудит                                |
+| logstash              | 5000 (TCP, json_lines)       | —                    | приём логов                                 |
+| kibana                | 5601                         | —                    | просмотр логов и аудита                     |
+| migrate, kafka-init, kibana-setup | —                | —                    | одноразовые: миграции, топики, data views   |
+| *-worker (8 шт.)      | —                            | —                    | консьюмеры Kafka и фоновые задачи           |
+
+Если порт занят, поменяйте его в `.env` и поправьте связанный URL (`REDIS_URL`,
+`KAFKA_BOOTSTRAP_SERVERS`, `WIREMOCK_BASE_URL`) — он нужен приложению, запущенному на хосте.
+
+## Быстрый старт
+
+Нужны Docker (Compose v2+) и, для команд на хосте, [uv](https://docs.astral.sh/uv/) (Python 3.15 uv
+поставит сам), `curl`, `jq`.
+
+```bash
+cp .env.example .env              # для демо годится как есть; для чего-то большего задайте секреты:
+                                  # POSTGRES_PASSWORD, JWT_SECRET, CARDS_PAN_HASH_KEY (≥ 32 символов)
+docker compose up -d              # или `make up` — дождётся, пока всё станет healthy
+uv sync                           # зависимости для команд на хосте
+uv run alembic upgrade head       # миграции (сервис migrate уже выполнил их — команда идемпотентна)
+uv run python -m scripts.seed     # демо-пользователи, счета и операции
+```
+
+Без Python на хосте: `make migrate` и `make seed` выполняют то же внутри образа приложения.
+Всё с нуля (удаляет данные!): `make reset` (= `scripts/reset.sh -y`: `down -v` → `up` → миграции → seed).
+
+Проверка: `make ps` (инфраструктура и `elbank-app` — `healthy`, воркеры — `Up`), затем
+
+```bash
+curl -s localhost:8000/health   # {"status":"ok","version":"0.1.0"}
+curl -s localhost:8000/ready    # PG + Redis + Kafka; 503, если что-то недоступно
+curl -s localhost:8081/ping     # WireMock
+```
+
+### Команды Makefile
+
+| Команда        | Что делает                                                               |
+|----------------|--------------------------------------------------------------------------|
+| `make up`      | сборка и запуск всех сервисов, ожидание healthy (`scripts/up.sh`)         |
+| `make down`    | остановить и удалить контейнеры (тома сохраняются)                        |
+| `make logs`    | логи всех сервисов; `make logs SERVICE=elbank-app` — одного              |
+| `make ps`      | состояние сервисов                                                       |
+| `make migrate` | `alembic upgrade head` в образе приложения                               |
+| `make seed`    | демо-данные (идемпотентно)                                               |
+| `make reset`   | удалить все данные и поднять с нуля + migrate + seed                     |
+| `make lint`    | `ruff check`, `ruff format --check`, `mypy` (strict)                     |
+| `make fmt`     | `ruff format` + `ruff check --fix`                                       |
+
+### Демо-пользователи (`scripts/seed.py`)
+
+| Роль    | Телефон        | Пароль          | Что есть                                                        |
+|---------|----------------|-----------------|-----------------------------------------------------------------|
+| admin   | `+79000000001` | `Admin-pass1`   | всё в `/api/v1/admin/*`                                         |
+| manager | `+79000000002` | `Manager-pass1` | KYC, блокировки, решения антифрода, тикеты                       |
+| auditor | `+79000000003` | `Auditor-pass1` | аудит, сверка, чтение админ-данных                              |
+| client  | `+79000000010` | `Client-pass1`  | Иван: текущий RUB (~311 тыс.), накопительный RUB, валютный USD, история за 3 месяца |
+| client  | `+79000000011` | `Client-pass2`  | Мария: текущий RUB (~88 тыс.)                                   |
+
+У клиентов KYC одобрен. Операции (зарплаты, платежи, переводы, конвертация) проведены по тем же
+правилам, что и в сервисах, поэтому аналитика и сверка за период сходятся. Также создано демо-правило
+антифрода «Крупный перевод с нового счёта»: от 10 000 со счёта моложе суток → проверка.
+
+## Демо-сценарий (curl)
+
+Регистрация → KYC → открытие счёта → перевод → платёж → антифрод → проверка в Kibana.
+Команды рассчитаны на bash и запущенный стек с демо-данными. Каждый пользователь входит один раз:
+вход ограничен 5 попытками на телефон за 15 минут (успешные тоже считаются), повтор чаще даст `429`.
+
+```bash
+API=http://localhost:8000/api/v1
+J='Content-Type: application/json'
+login() { curl -sf -X POST "$API/auth/login" -H "$J" \
+  -d "{\"phone\":\"$1\",\"password\":\"$2\"}" | jq -r .access_token; }
+key() { cat /proc/sys/kernel/random/uuid; }      # ключ идемпотентности
+
+# 1. Регистрация и вход
+PHONE="+7955$(date +%s | tail -c 8)"
+curl -s -X POST "$API/auth/register" -H "$J" \
+  -d "{\"phone\":\"$PHONE\",\"password\":\"Demo-pass1\",\"email\":\"demo${PHONE:2}@example.com\"}" | jq
+AUTH="Authorization: Bearer $(login "$PHONE" Demo-pass1)"
+
+# 2. KYC: паспорт проверяют «Госуслуги» (WireMock) — заявка сразу approved
+printf '\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9' > /tmp/passport.jpg
+curl -s -X POST "$API/kyc/requests" -H "$AUTH" -F passport_series=4510 -F passport_number=123456 \
+  -F birth_date=1990-05-17 -F "file=@/tmp/passport.jpg;type=image/jpeg" | jq '{id, status}'
+
+# 3. Открытие текущего рублёвого счёта
+ACC=$(curl -s -X POST "$API/accounts" -H "$AUTH" -H "$J" \
+  -d '{"type":"checking","currency":"RUB"}' | jq -r .id); echo "$ACC"
+
+# 4. Перевод: демо-клиент Иван отправляет 15 000 на новый счёт (комиссия 0,5 %, мин. 10;
+#    дневной лимит счёта — 100 000, поэтому сценарий можно повторить ~6 раз в сутки)
+IVAN="Authorization: Bearer $(login +79000000010 Client-pass1)"
+IVAN_ACC=$(curl -s "$API/accounts" -H "$IVAN" | jq -r '[.[] | select(.type=="checking")][0].id')
+curl -s -X POST "$API/transfers/internal" -H "$IVAN" -H "$J" -d "{\"from_account_id\":\"$IVAN_ACC\",
+  \"to_account_id\":\"$ACC\",\"amount\":\"15000.00\",\"currency\":\"RUB\",\"idempotency_key\":\"$(key)\"}" \
+  | jq '{operation_id, status, fee, error_code}'   # pending: 60 с можно отменить, потом completed
+curl -s "$API/accounts/$ACC" -H "$AUTH" | jq '{number, balance}'      # 15000.00
+
+# 5. Платёж: пополнение телефона (провайдер mobile, WireMock)
+curl -s -X POST "$API/payments" -H "$AUTH" -H "$J" -d "{\"account_id\":\"$ACC\",\"provider\":\"mobile\",
+  \"amount\":\"300.00\",\"payload\":{\"phone\":\"+79161234567\"},\"idempotency_key\":\"$(key)\"}" \
+  | jq '{id, status, external_id}'          # completed
+
+# 6. Антифрод: СБП 10 000 со счёта моложе суток удерживается (ключ идемпотентности — в заголовке)
+OP=$(curl -s -X POST "$API/transfers/sbp" -H "$AUTH" -H "$J" -H "Idempotency-Key: $(key)" \
+  -d "{\"from_account_id\":\"$ACC\",\"phone\":\"+79161234567\",\"amount\":\"10000.00\"}" \
+  | tee /dev/stderr | jq -r .operation_id)  # status pending, error_code FRAUD_REVIEW
+MANAGER="Authorization: Bearer $(login +79000000002 Manager-pass1)"
+curl -s "$API/admin/operations/fraud-cases" -H "$MANAGER" | jq '.items[0] | {operation_id, rules}'
+curl -s -X POST "$API/admin/operations/$OP/confirm" -H "$MANAGER" -H "$J" \
+  -d '{"reason":"клиент подтвердил по телефону"}' | jq '{status, operation_status}'   # completed
+curl -s "$API/support/tickets" -H "$AUTH" | jq '[.items[] | {category, status}]'     # fraud, resolved
+
+# 7. История и аудит
+curl -s "$API/operations?size=5" -H "$AUTH" | jq '[.items[] | {type, status, amount}]'
+AUDITOR="Authorization: Bearer $(login +79000000003 Auditor-pass1)"
+USER_ID=$(curl -s "$API/users/me" -H "$AUTH" | jq -r .id)
+curl -s "$API/admin/audit?user_id=$USER_ID" -H "$AUDITOR" | jq '[.items[].action] | unique'
+echo "Kibana: http://localhost:5601 → Discover → ElBank audit, запрос: user_id : \"$USER_ID\""
+```
+
+Ещё: аналитика `GET /analytics/monthly?year=2026` (Иван), сверка `POST /admin/reconciliation/run`
+(auditor/admin), выписки и экспорт — см. разделы ниже и Swagger (`/docs`).
+
+## Что посмотреть в Kibana
+
+http://localhost:5601 → Discover. Data views создаёт `kibana-setup`: **ElBank logs** (`elbank-logs-*`,
+поле времени `@timestamp`) и **ElBank audit** (`elbank-audit-*`, поле `timestamp`). Вручную: Stack
+Management → Data Views → Create data view → шаблон индекса и поле времени.
+
+**ElBank logs** (поля: `level`, `logger`, `message`, `correlation_id`, `service`, `env` + контекст):
+
+| Что найти                                  | KQL                                                          |
+|--------------------------------------------|--------------------------------------------------------------|
+| все ошибки                                 | `level : "ERROR"`                                            |
+| один запрос во всех сервисах и воркерах    | `correlation_id : "<значение X-Correlation-Id из ответа>"`   |
+| удержания антифродом                       | `message : "operation held by anti-fraud rules"`             |
+| опубликованные события перевода            | `message : "event published" and event_type : "transfer.completed"` |
+| сбои внешних сервисов (WireMock)           | `level : ("WARNING" or "ERROR") and logger : elbank.clients*` |
+| HTTP-запросы к админке                     | `logger : "uvicorn.access" and message : *admin*`            |
+
+**ElBank audit** (поля: `action`, `user_id`, `entity`, `entity_id`, `payload.*`, `ip`, `user_agent`):
+
+| Что найти                                  | KQL                                                          |
+|--------------------------------------------|--------------------------------------------------------------|
+| всё, что делал пользователь                | `user_id : "<uuid>"`                                         |
+| решения и удержания антифрода              | `action : fraud.*`                                           |
+| действия администраторов                   | `action : admin.*`                                           |
+| неуспешные запросы на изменение            | `action : http.* and payload.status_code >= 400`             |
+| созданные переводы и платежи               | `action : (http.create_internal_transfer or http.create_sbp_transfer or http.create_payment)` |
+| неудачные входы                            | `action : "auth.login_failed"`                               |
+
+PII в обоих индексах замаскирован: телефоны `+7***1234`, карты `**** 1234`, паспорт/CVV/пароли/токены —
+`[REDACTED]`.
+
+## Моки WireMock
+
+Маппинги — `wiremock/mappings/*.json`, тела ответов — `wiremock/__files/`. При совпадении нескольких
+маппингов выигрывает меньший `priority`: тестовые значения (1) перекрывают «успех для любого
+корректного запроса» (10). Журнал запросов: `GET localhost:8081/__admin/requests`.
+
+| Внешний сервис       | Endpoint                                   | Успех (любой корректный запрос) | Тестовые значения → ответ                                                          |
+|----------------------|--------------------------------------------|----------------------------------|------------------------------------------------------------------------------------|
+| Госуслуги (KYC)      | `POST /gosuslugi/verify-passport`          | `valid: true`                    | серия `0000` или номер `000000` → недействителен; серия `9999` → 503; мусор → 400   |
+| ЦБ РФ (курсы)        | `GET /cbr/rates`                           | курсы USD/EUR/CNY                | —                                                                                  |
+| Межбанк              | `POST /interbank/transfer`                 | `accepted`                       | счёт получателя на `9999999` → `rejected` (счёт закрыт)                             |
+| СБП                  | `POST /sbp/send`                           | `accepted`                       | телефон `+79990000002` → задержка 15 с (таймаут клиента)                           |
+| Провайдеры услуг     | `POST /providers/{mobile,utility,internet,fns,gibdd,qr,receipt}/pay` | `accepted` + `transaction_id` | `mobile`: `+79990000003` → 422, `+79990000004` → задержка 8 с; `utility`: лицевой счёт `000000` → 404, `999999` → 8 с; `internet`: `INET-000000` → 422, `INET-999999` → 8 с; `fns`: УИН из нулей → 422, из девяток → 8 с; `gibdd`: `18800000000000000000` → 404, `18899999999999999999` → 8 с; `qr`: `PersonalAcc=000…0` → 422, `999…9` → 8 с; `receipt`: `0000000000` → 422, `9999999999` → 8 с |
+| БКИ (скоринг)        | `POST /bki/score`                          | approve, score 720               | `+79990000007` → reject (480); `+79990000008` → score 580 (ниже порога); `+79990000010` → 810 (льготная ставка); `+79990000009` → 503 |
+| Брокер               | `GET /broker/quotes`, `POST /broker/orders` | котировки; заявка исполнена      | количество > 10000 → 422                                                           |
+| Процессинг карт      | `POST /card-processor/issue`, `/{pan_hash}/block`, `/unblock` | карта выпущена / заблокирована | держатель `+79990000005` → 422; `+79990000006` → 503; прочий некорректный запрос → 400 |
+| SMS-шлюз             | `POST /sms/send`                           | `queued`                         | `+79990000000` → 503; `+79990000001` → задержка 10 с; `+79990000011` → 500; мусор → 400 |
+| E-mail-шлюз          | `POST /email/send`                         | `queued`                         | —                                                                                  |
+| Push-шлюз            | `POST /push/send`                          | `delivered`                         | `+79990000012` → задержка 10 с                                                     |
+| Smoke                | `GET /ping`                                | `status: ok`                         | —                                                                                  |
 
 ## Структура
 
 ```
 src/elbank/
-  main.py          # FastAPI-приложение, lifespan (PG, Redis, Kafka)
+  main.py          # FastAPI-приложение, lifespan (PG, Redis, Kafka, Elasticsearch)
   __main__.py      # python -m elbank / консольная команда `elbank`
+  cli.py           # elbank-set-role (назначить роль, напр. первого admin)
   deps.py          # FastAPI-зависимости (сессия БД, Redis, Kafka)
-  api/routes/      # HTTP-роуты
-  core/            # конфиг, логирование (structlog -> Logstash), JWT/пароли
+  api/             # роуты, middleware (correlation id, аудит), DI сервисов
+  core/            # конфиг, логирование (structlog → Logstash), PII, JWT/пароли
   db/              # Base, engine/session, ORM-модели
   schemas/         # Pydantic-схемы
   services/        # бизнес-логика
   clients/         # клиенты внешних API (httpx, мокаются WireMock)
-  kafka/           # продюсеры/консьюмеры
-  workers/         # фоновые процессы (Kafka-консьюмеры), напр. генерация выписок
+  kafka/           # продюсер и формат событий
+  workers/         # консьюмеры Kafka и фоновые процессы
+scripts/           # seed.py (демо-данные), up.sh, reset.sh
 alembic/           # миграции
 wiremock/          # маппинги и файлы ответов WireMock
 logstash/pipeline/ # пайплайн Logstash
@@ -27,80 +258,25 @@ logstash/pipeline/ # пайплайн Logstash
 
 ## Конфигурация
 
-Все настройки — через переменные окружения / `.env` (см. `.env.example`):
+Все настройки — через переменные окружения / `.env` (см. `.env.example`, там же комментарии).
+В `.env` хосты указаны для запуска на хосте (`localhost`); в docker-compose они переопределяются на
+имена сервисов (`postgres`, `redis`, `kafka:9092`, …). В коде настройки сгруппированы по секциям
+(`settings.postgres.host`), имена переменных плоские (`POSTGRES_HOST`). Секрет для `JWT_SECRET` и
+`CARDS_PAN_HASH_KEY`: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+
+## Локальная разработка (приложение на хосте)
 
 ```bash
-cp .env.example .env
-# Задайте POSTGRES_PASSWORD, JWT_SECRET и CARDS_PAN_HASH_KEY (не короче 32 символов):
-python -c "import secrets; print(secrets.token_urlsafe(48))"
+uv sync
+docker compose up -d postgres redis kafka kafka-init kafka-ui wiremock elasticsearch logstash kibana kibana-setup
+uv run alembic upgrade head
+uv run uvicorn elbank.main:app --reload   # или: uv run elbank
+uv run elbank-transfers-worker            # и другие воркеры по необходимости (см. pyproject.toml)
 ```
 
-В `.env` хосты указаны для запуска приложения на хосте (`localhost`).
-В docker-compose они переопределяются на имена сервисов (`postgres`, `redis`, `kafka:9092`, ...).
-
-В коде настройки сгруппированы по секциям (`settings.postgres.host`, `settings.jwt.secret`, ...),
-имена переменных окружения при этом плоские (`POSTGRES_HOST`, `JWT_SECRET`, ...).
-
-Host-порты контейнеров: `APP_PORT`, `POSTGRES_PORT`, `REDIS_HOST_PORT`, `KAFKA_HOST_PORT`,
-`KAFKA_UI_HOST_PORT`, `WIREMOCK_HOST_PORT` — если стандартный порт занят, поменяйте его в `.env`
-(не забудьте про соответствующий URL: `REDIS_URL`, `KAFKA_BOOTSTRAP_SERVERS`, `WIREMOCK_BASE_URL`).
-
-## Локальный запуск
-
-Требуется [uv](https://docs.astral.sh/uv/). Python 3.15 uv установит сам.
-
-```bash
-uv sync                                   # создаёт .venv и ставит зависимости (вкл. dev)
-
-# инфраструктура в Docker, приложение — на хосте
-docker compose up -d postgres redis kafka kafka-ui wiremock elasticsearch logstash kibana kibana-setup
-
-uv run alembic upgrade head               # миграции
-uv run uvicorn elbank.main:app --reload   # http://localhost:8000
-# или: uv run elbank  (host/port/reload берутся из .env)
-```
-
-Kafka с хоста доступна на `localhost:29092` (внутри сети compose — `kafka:9092`).
-
-## Запуск через docker-compose
-
-```bash
-docker compose up -d --build
-docker compose ps
-```
-
-Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`,
-`statement-worker` (консьюмер `statement.requested`), `exports-worker` (консьюмер `export.requested`),
-`operations-worker` (консьюмер `operation.completed`: кэш аналитики и бюджеты), `notifications-worker`
-(консьюмер `notification.send`), `reconciliation-worker` (консьюмер `reconciliation.requested`),
-`audit-worker` (консьюмер `audit.event` → Elasticsearch),
-`deposit-worker` и `transfers-worker` (завершение переводов, разбор таймаутов внешних переводов
-и платежей). Сервис `kibana-setup` создаёт в Kibana data views `elbank-logs-*` и `elbank-audit-*`
-и завершается.
-
-Порты по умолчанию (переопределяются в `.env`):
-
-| Сервис        | URL                          |
-|---------------|------------------------------|
-| API / Swagger | http://localhost:8000/docs   |
-| Kafka UI      | http://localhost:8080        |
-| WireMock      | http://localhost:8081        |
-| Elasticsearch | http://localhost:9200        |
-| Kibana        | http://localhost:5601        |
-| Logstash TCP  | localhost:5000               |
-| PostgreSQL    | localhost:5432               |
-| Redis         | localhost:6379               |
-| Kafka         | localhost:29092              |
-
-Остановка: `docker compose down` (с удалением данных: `docker compose down -v`).
-
-## Проверка
-
-```bash
-curl -s localhost:8000/health   # liveness: {"status":"ok","version":"0.1.0"}
-curl -s localhost:8000/ready    # readiness: PG + Redis + Kafka; 503, если что-то недоступно
-curl -s localhost:8081/ping     # WireMock
-```
+Kafka с хоста — `localhost:29092`. Образ приложения: multi-stage (`builder` с uv → `runtime` только с
+venv), ~215 МБ, пользователь без root, `HEALTHCHECK` на `/health`; байткод компилируется при первом
+импорте в `/tmp` (первый старт процесса ~7 с, дальше ~2 с).
 
 ## Аутентификация
 
@@ -729,7 +905,7 @@ uv run alembic downgrade -1
 
 Новые модели импортируйте в `src/elbank/db/models/__init__.py`, иначе autogenerate их не увидит.
 
-В контейнере: `docker compose exec elbank-app uv run alembic upgrade head`
+В контейнере: `docker compose exec elbank-app alembic upgrade head` (или `make migrate`)
 (при `docker compose up` это делает сервис `migrate`).
 
 Соглашения по моделям:
@@ -743,7 +919,9 @@ uv run alembic downgrade -1
 ## Качество кода
 
 ```bash
-uv run ruff format .
-uv run ruff check .
-uv run mypy
+make lint      # ruff check + ruff format --check (src, scripts) + mypy --strict (src)
+make fmt       # ruff format + ruff check --fix
 ```
+
+Ruff: `line-length = 100`, `target-version = "py315"` — по `requires-python`: код использует синтаксис
+3.14+ и отложенные аннотации (PEP 649), с более старой целью ruff даёт ложные ошибки.

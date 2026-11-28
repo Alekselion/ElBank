@@ -12,3 +12,4 @@ logstash
 docker-compose.yml
 Dockerfile
 uploads/
+scripts/*.sh

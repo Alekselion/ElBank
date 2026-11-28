@@ -53,8 +53,10 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
-src = ["src"]
+# Must follow requires-python: the code uses 3.14+ syntax and deferred annotations (PEP 649),
+# so an older target reports false F821 errors and a syntax error.
+target-version = "py315"
+src = ["src", "scripts"]
 extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
@@ -65,6 +67,9 @@ ignore = [
     "S101",     # asserts are used for type narrowing
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/seed.py" = ["RUF001"]  # Cyrillic demo data (names, descriptions)
+
 [tool.ruff.lint.isort]
 known-first-party = ["elbank"]
 known-third-party = ["alembic"]
@@ -74,7 +79,7 @@ python_version = "3.15"
 strict = true
 plugins = ["pydantic.mypy"]
 mypy_path = "src"
-packages = ["elbank"]
+files = ["src/elbank", "scripts"]
 warn_unreachable = true
 
 [[tool.mypy.overrides]]

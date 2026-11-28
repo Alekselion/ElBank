@@ -40,6 +40,19 @@ def default_rule(code: TariffCode, settings: TransferSettings) -> FeeRule:
             return FeeRule(percent=settings.conversion_fee_percent)
 
 
+def resolve_rule(code: TariffCode, tariff: Tariff | None, settings: TransferSettings) -> FeeRule:
+    """Stored rule, or the default; a corrupted stored config falls back to the default."""
+    if tariff is None:
+        return default_rule(code, settings)
+    try:
+        return FeeRule.model_validate(tariff.config)
+    except ValidationError as exc:
+        logger.error(  # noqa: TRY400 - the validation error is logged
+            "invalid tariff config, default used", code=code.value, error=str(exc)
+        )
+        return default_rule(code, settings)
+
+
 class TariffService:
     def __init__(
         self, session: AsyncSession, settings: TransferSettings, audit: AuditService
@@ -100,13 +113,4 @@ class TariffService:
         return await self.list_all()
 
     def _rule(self, code: TariffCode, tariff: Tariff | None) -> FeeRule:
-        """Stored rule, or the default; a corrupted stored config falls back to the default."""
-        if tariff is None:
-            return default_rule(code, self._settings)
-        try:
-            return FeeRule.model_validate(tariff.config)
-        except ValidationError as exc:
-            logger.error(  # noqa: TRY400 - the validation error is logged
-                "invalid tariff config, default used", code=code.value, error=str(exc)
-            )
-            return default_rule(code, self._settings)
+        return resolve_rule(code, tariff, self._settings)

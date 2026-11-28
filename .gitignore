@@ -19,8 +19,8 @@ wheels/
 .vscode/
 .DS_Store
 
-# Other / misc
-scripts/
+# Other / misc (local helper, not part of the project; scripts/ itself is tracked)
+scripts/move-docker-data-root.sh
 
 # KYC uploads (local runs)
 uploads/
