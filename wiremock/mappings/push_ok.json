@@ -1,0 +1,37 @@
+{
+  "name": "Push gateway: send notification (success)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/push/send",
+    "headers": {
+      "Content-Type": {
+        "contains": "application/json"
+      }
+    },
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.user_id"
+      },
+      {
+        "matchesJsonPath": "$.title"
+      },
+      {
+        "matchesJsonPath": "$.body"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "jsonBody": {
+      "message_id": "{{randomValue type='UUID'}}",
+      "status": "delivered",
+      "user_id": "{{jsonPath request.body '$.user_id'}}",
+      "delivered_at": "{{now}}"
+    }
+  }
+}

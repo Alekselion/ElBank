@@ -32,6 +32,7 @@ dependencies = [
 elbank = "elbank.__main__:main"
 elbank-deposits-worker = "elbank.workers.deposits:main"
 elbank-exports-worker = "elbank.workers.exports:main"
+elbank-notifications-worker = "elbank.workers.notifications:main"
 elbank-operations-worker = "elbank.workers.operations:main"
 elbank-statements-worker = "elbank.workers.statements:main"
 elbank-transfers-worker = "elbank.workers.transfers:main"

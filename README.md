@@ -71,7 +71,8 @@ docker compose ps
 
 Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`,
 `statement-worker` (консьюмер `statement.requested`), `exports-worker` (консьюмер `export.requested`),
-`operations-worker` (консьюмер `operation.completed`: кэш аналитики и бюджеты), `deposit-worker` и
+`operations-worker` (консьюмер `operation.completed`: кэш аналитики и бюджеты), `notifications-worker`
+(консьюмер `notification.send`), `deposit-worker` и
 `transfers-worker` (завершение переводов, разбор таймаутов внешних переводов и платежей).
 Сервис `kibana-setup` создаёт в Kibana data view `elbank-logs-*` и завершается.
 
@@ -121,7 +122,8 @@ curl -s localhost:8081/ping     # WireMock
   `kyc.decided` создаёт сервис `kafka-init`.
 
 Код из SMS при локальной разработке виден в журнале WireMock: `GET localhost:8081/__admin/requests`.
-Тестовые номера WireMock: `+79990000000` — SMS-шлюз отвечает 503, `+79990000001` — таймаут.
+Тестовые номера WireMock: `+79990000000` — SMS-шлюз отвечает 503, `+79990000001` — таймаут,
+`+79990000011` — SMS-шлюз отвечает 500, `+79990000012` — таймаут push-шлюза.
 
 ## Профиль
 
@@ -191,7 +193,8 @@ Redis не ломает `GET /` — ответ берётся из БД.
 `STATEMENTS_MAX_PERIOD_DAYS`, `to` не в будущем. Если Kafka недоступна, задача не создаётся (`503`).
 
 Локально воркеры запускаются отдельно: `uv run elbank-statements-worker`, `uv run elbank-transfers-worker`,
-`uv run elbank-deposits-worker`, `uv run elbank-exports-worker`, `uv run elbank-operations-worker`.
+`uv run elbank-deposits-worker`, `uv run elbank-exports-worker`, `uv run elbank-operations-worker`,
+`uv run elbank-notifications-worker`.
 
 ## Переводы
 
@@ -551,6 +554,35 @@ Fan-out: каждый процесс API держит один Kafka-консь�
 `GET /api/v1/support/faq[?category=]` — опубликованные статьи `FaqArticle`, без авторизации. Весь
 список кэшируется в Redis (`faq:articles`, `SUPPORT_FAQ_CACHE_TTL_SECONDS` = 10 мин). Стартовые
 статьи добавляет миграция `7c2d4e8a9f13`.
+
+## Уведомления
+
+Любой сервис публикует `notification.send` `{user_id, channel: sms|email|push|in_app, template, ...поля
+шаблона}`. Воркер `elbank-notifications-worker` (сервис `notifications-worker`):
+
+1. сохраняет `Notification` (`delivery_status: pending`) с `dedup_key = {event_id}:{user_id}`
+   (уникальный индекс, `INSERT ... ON CONFLICT DO NOTHING`): повтор события не создаёт вторую запись;
+2. не отправляет, а только сохраняет (`skipped` + `delivery_note`), если канал выключен в
+   `users.notification_settings` (`channel_disabled`), канал `in_app` (`in_app`) или у пользователя нет
+   e-mail (`no_recipient`). Событие с `provider_message_id` (OTP — SMS уже отправлено) записывается как
+   `sent`. События без `user_id` (OTP при регистрации) не сохраняются;
+3. иначе отправляет: `sms` → `POST {WM}/sms/send`, `email` → `/email/send`, `push` → `/push/send`
+   (текст — по шаблону `template`). 5xx, таймаут и ошибка соединения повторяются
+   `NOTIFICATIONS_RETRIES` (3) раза с экспоненциальной паузой, 4xx — нет; после этого `failed` и лог
+   уровня `error`. Запросы несут `Idempotency-Key: <dedup_key>`: запись, оставшаяся `pending` после
+   падения воркера, при повторе события отправляется снова без дубля у шлюза.
+
+`/api/v1/notifications`:
+
+| Метод и путь              | Назначение                                                         |
+|---------------------------|--------------------------------------------------------------------|
+| `GET /?unread=&limit=&offset=` | уведомления, новые первыми; `unread` — число непрочитанных    |
+| `POST /{id}/read`         | отметить прочитанным (повтор ничего не меняет)                     |
+| `POST /read-all`          | отметить все → `{updated}`                                         |
+| `GET /settings`, `PATCH /settings` | каналы `email`, `sms`, `push`, `in_app` (то же, что `/users/me/notification-settings`) |
+
+WireMock: `sms_ok.json`, `sms_fail.json` (500 для `+79990000011`), `email_ok.json`, `push_ok.json`,
+`push_timeout.json` (задержка 10 с для `+79990000012`; push-шлюз находит устройства по телефону).
 
 ## Логи
 

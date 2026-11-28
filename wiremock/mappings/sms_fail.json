@@ -1,0 +1,23 @@
+{
+  "name": "SMS gateway: internal error (500) for the test number +79990000011",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/sms/send",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$[?(@.phone == '+79990000011')]"
+      }
+    ]
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "error": "internal_error",
+      "message": "SMS gateway internal error"
+    }
+  }
+}

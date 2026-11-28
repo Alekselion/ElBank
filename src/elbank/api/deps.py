@@ -44,6 +44,7 @@ from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.investments import InvestmentService
 from elbank.services.kyc import KycService
 from elbank.services.ledger import OutgoingChecks
+from elbank.services.notifications import NotificationService
 from elbank.services.operations import OperationHistoryService
 from elbank.services.otp import OtpService
 from elbank.services.payments import PaymentService, TemplateService
@@ -427,3 +428,10 @@ def get_faq_service(session: DbSessionDep, redis: RedisDep, settings: SettingsDe
 
 
 FaqServiceDep = Annotated[FaqService, Depends(get_faq_service)]
+
+
+def get_notification_service(session: DbSessionDep) -> NotificationService:
+    return NotificationService(session)
+
+
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]

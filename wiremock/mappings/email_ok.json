@@ -1,0 +1,37 @@
+{
+  "name": "E-mail gateway: send message (success)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/email/send",
+    "headers": {
+      "Content-Type": {
+        "contains": "application/json"
+      }
+    },
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$[?(@.to =~ /^[^@\\s]+@[^@\\s]+$/)]"
+      },
+      {
+        "matchesJsonPath": "$.subject"
+      },
+      {
+        "matchesJsonPath": "$.text"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Correlation-Id": "{{request.headers.X-Correlation-Id}}"
+    },
+    "jsonBody": {
+      "message_id": "{{randomValue type='UUID'}}",
+      "status": "queued",
+      "to": "{{jsonPath request.body '$.to'}}",
+      "queued_at": "{{now}}"
+    }
+  }
+}

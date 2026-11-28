@@ -181,3 +181,10 @@ class NotificationChannel(StrEnum):
     SMS = "sms"
     PUSH = "push"
     IN_APP = "in_app"
+
+
+class NotificationDeliveryStatus(StrEnum):
+    PENDING = "pending"  # saved, external delivery not finished yet
+    SENT = "sent"  # accepted by the gateway (or already sent by the producer, e.g. OTP)
+    FAILED = "failed"  # gateway error after all retries, or rejected (4xx)
+    SKIPPED = "skipped"  # stored only: channel disabled, no recipient, in-app channel

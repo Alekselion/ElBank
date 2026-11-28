@@ -139,6 +139,30 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  # Kafka consumer of notification.send: stores notifications and delivers them through
+  # the sms/email/push gateways (WireMock). Idempotent (notifications.dedup_key).
+  notifications-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-notifications-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      wiremock:
+        condition: service_healthy
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port; the process exits (and restarts) on fatal errors
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   # Accrues deposit interest on deposit.interest.tick (POST /api/v1/admin/deposits/accrue).
   # Safe to scale: deposits are taken with SELECT ... FOR UPDATE SKIP LOCKED.
   deposit-worker:

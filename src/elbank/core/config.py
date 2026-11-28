@@ -374,6 +374,17 @@ class SupportSettings(_Section):
     ws_queue_size: int = Field(default=100, ge=1)
 
 
+class NotificationDeliverySettings(_Section):
+    """Delivery of ``notification.send`` by the notifications worker (sms/email/push gateways)."""
+
+    model_config = SettingsConfigDict(env_prefix="NOTIFICATIONS_")
+
+    timeout_seconds: float = Field(default=3.0, gt=0)
+    # Extra attempts after the first one on 5xx / timeout / connection error (never on 4xx).
+    retries: int = Field(default=3, ge=0, le=5)
+    consumer_group: str = "elbank-notifications"
+
+
 class TransferSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="TRANSFERS_")
 
@@ -439,6 +450,9 @@ class Settings(_Section):
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     budgets: BudgetSettings = Field(default_factory=BudgetSettings)
     support: SupportSettings = Field(default_factory=SupportSettings)
+    notifications: NotificationDeliverySettings = Field(
+        default_factory=NotificationDeliverySettings
+    )
     transfers: TransferSettings = Field(default_factory=TransferSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)
 

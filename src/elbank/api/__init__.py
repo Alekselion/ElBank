@@ -13,6 +13,7 @@ from elbank.api.routes import (
     health,
     investments,
     kyc,
+    notifications,
     operations,
     payments,
     support,
@@ -41,5 +42,6 @@ api_router.include_router(budgets.router, prefix="/api/v1/budgets")
 api_router.include_router(support.router, prefix="/api/v1/support/tickets")
 api_router.include_router(support.faq_router, prefix="/api/v1/support/faq")
 api_router.include_router(support_ws.router)
+api_router.include_router(notifications.router, prefix="/api/v1/notifications")
 
 __all__ = ["api_router"]
