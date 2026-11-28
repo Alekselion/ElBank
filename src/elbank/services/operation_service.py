@@ -11,7 +11,8 @@ and the operation waits for confirmation (``error_code`` says why).
 
 ``completed``, ``failed`` and ``cancelled`` are terminal. An invalid transition
 raises :class:`InvalidStateError` (HTTP 409). The service does not commit: the
-caller owns the transaction.
+caller owns the transaction. Every completion is published as ``operation.completed``
+once the caller commits (see :mod:`elbank.services.operation_events`).
 """
 
 import uuid
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from elbank.core.exceptions import InvalidStateError
 from elbank.core.logging import get_logger
 from elbank.db.models import Operation, OperationStatus, OperationType
+from elbank.services.operation_events import record_completed
 
 logger = get_logger(__name__)
 
@@ -124,6 +126,7 @@ class OperationService:
 
     def mark_completed(self, operation: Operation) -> None:
         self._transition(operation, OperationStatus.COMPLETED)
+        record_completed(self._session, operation)
 
     def mark_failed(self, operation: Operation, error_code: str) -> None:
         self._transition(operation, OperationStatus.FAILED)

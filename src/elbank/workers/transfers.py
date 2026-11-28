@@ -28,10 +28,13 @@ from elbank.db.session import create_engine, create_session_factory
 from elbank.kafka import EventPublisher, KafkaProducer
 from elbank.services.account_cache import AccountListCache
 from elbank.services.external_transfers import ExternalTimeoutResolver
+from elbank.services.operation_events import OperationEventRelay, bind_operation_events
 from elbank.services.payments import PaymentTimeoutResolver
 from elbank.services.transfers import TransferFinalizer
 
 logger = get_logger(__name__)
+
+_EVENT_DRAIN_SECONDS = 5.0
 
 
 class TransferWorker:
@@ -68,6 +71,8 @@ async def run(settings: Settings) -> None:
     kafka = KafkaProducer(settings.kafka)
     session_factory = create_session_factory(engine)
     publisher = EventPublisher(kafka)
+    relay = OperationEventRelay(publisher)
+    bind_operation_events(session_factory, relay)
     cache = AccountListCache(redis, settings.accounts.list_cache_ttl_seconds)
     finalizer = TransferFinalizer(session_factory, publisher, settings.transfers)
     resolver = ExternalTimeoutResolver(session_factory, cache, publisher, settings.transfers)
@@ -86,6 +91,7 @@ async def run(settings: Settings) -> None:
     try:
         await worker.run()
     finally:
+        await relay.drain(_EVENT_DRAIN_SECONDS)
         await kafka.stop()
         await redis.aclose()
         await engine.dispose()

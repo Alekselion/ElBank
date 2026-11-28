@@ -36,6 +36,8 @@ class EventType(StrEnum):
     ACCOUNT_BLOCKED = "account.blocked"
     ACCOUNT_UNBLOCKED = "account.unblocked"
     STATEMENT_REQUESTED = "statement.requested"
+    EXPORT_REQUESTED = "export.requested"
+    OPERATION_COMPLETED = "operation.completed"
     TRANSFER_COMPLETED = "transfer.completed"
     TRANSFER_FAILED = "transfer.failed"
     TRANSFER_REVERSED = "transfer.reversed"

@@ -14,6 +14,7 @@ x-app-env: &app-env
   ELASTIC_URL: http://elasticsearch:9200
   KYC_UPLOADS_DIR: /app/uploads
   STATEMENTS_DIR: /app/uploads/statements
+  EXPORTS_DIR: /app/uploads/exports
 
 services:
   # ================================================================ application
@@ -86,6 +87,57 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  # Kafka consumer of export.requested: writes CSV/PDF operation history to the shared
+  # uploads volume, from where elbank-app serves them.
+  exports-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-exports-worker"]
+    volumes:
+      - kyc_uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port; the process exits (and restarts) on fatal errors
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  # Kafka consumer of operation.completed: drops the analytics cache of the account
+  # owner and checks budgets (notification.send warn/danger).
+  # Scales up to the number of partitions of operation.completed.
+  operations-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-operations-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port; the process exits (and restarts) on fatal errors
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   # Accrues deposit interest on deposit.interest.tick (POST /api/v1/admin/deposits/accrue).
   # Safe to scale: deposits are taken with SELECT ... FOR UPDATE SKIP LOCKED.
   deposit-worker:
@@ -108,7 +160,8 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  # Completes pending transfers after the cancel window and publishes transfer.completed.
+  # Completes pending transfers after the cancel window and publishes transfer.completed
+  # (and operation.completed for every completed posting).
   # Safe to scale: due transfers are taken with SELECT ... FOR UPDATE SKIP LOCKED.
   transfers-worker:
     build: .
@@ -120,6 +173,8 @@ services:
       migrate:
         condition: service_completed_successfully
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
@@ -203,7 +258,7 @@ services:
         user.registered user.deleted profile.updated notification.send
         kyc.requested kyc.decided
         account.opened account.closed account.blocked account.unblocked
-        statement.requested
+        statement.requested export.requested operation.completed
         transfer.completed transfer.failed transfer.reversed
         payment.processed payment.failed
         card.issued card.blocked card.unblocked

@@ -38,6 +38,11 @@ FROM python:${PYTHON_VERSION}-slim AS runtime
 ARG APP_UID=10001
 ARG APP_GID=10001
 
+# DejaVu: TTF with Cyrillic glyphs for PDF exports (EXPORTS_PDF_FONT_PATH).
+RUN apt-get update \
+ && apt-get install --no-install-recommends -y fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid ${APP_GID} elbank \
  && useradd --system --uid ${APP_UID} --gid elbank --no-create-home --shell /usr/sbin/nologin elbank
 

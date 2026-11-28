@@ -95,6 +95,27 @@ class PaymentProvider(StrEnum):
     RECEIPT = "receipt"  # paper receipt by its number
 
 
+class SpendingCategory(StrEnum):
+    """Expense category of a debit, derived from the operation type (+ provider for payments).
+
+    See :mod:`elbank.services.categories` for the mapping.
+    """
+
+    UTILITIES = "utilities"  # payment: utility
+    MOBILE = "mobile"  # payment: mobile
+    INTERNET = "internet"  # payment: internet
+    TAXES = "taxes"  # payment: tax
+    FINES = "fines"  # payment: traffic_fine
+    QR_PAYMENTS = "qr_payments"  # payment: qr (purchases by a payment QR code)
+    BILLS = "bills"  # payment: receipt
+    TRANSFERS = "transfers"  # internal (to another client), interbank and SBP transfers
+    FEES = "fees"
+    LOANS = "loans"  # credit repayments
+    SAVINGS = "savings"  # deposit opening and top-ups
+    INVESTMENTS = "investments"  # securities purchases
+    OTHER = "other"
+
+
 class PaymentOrderStatus(StrEnum):
     CREATED = "created"
     SENT = "sent"

@@ -16,9 +16,12 @@ from elbank.core.exceptions import AppError
 from elbank.core.logging import get_logger, setup_logging
 from elbank.db.session import create_engine, create_session_factory
 from elbank.deps import Resources
-from elbank.kafka import KafkaProducer
+from elbank.kafka import EventPublisher, KafkaProducer
+from elbank.services.operation_events import OperationEventRelay, bind_operation_events
 
 logger = get_logger(__name__)
+
+_EVENT_DRAIN_SECONDS = 5.0
 
 
 @asynccontextmanager
@@ -33,9 +36,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001 - app must boot; /ready reports Kafka as down
         logger.warning("kafka producer start deferred", error=str(exc) or type(exc).__name__)
 
+    session_factory = create_session_factory(engine)
+    relay = OperationEventRelay(EventPublisher(kafka))
+    bind_operation_events(session_factory, relay)
     app.state.resources = Resources(
         engine=engine,
-        session_factory=create_session_factory(engine),
+        session_factory=session_factory,
         redis=redis,
         kafka=kafka,
         http=http,
@@ -44,6 +50,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await relay.drain(_EVENT_DRAIN_SECONDS)
         await kafka.stop()
         await http.aclose()
         await redis.aclose()

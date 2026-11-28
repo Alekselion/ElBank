@@ -31,22 +31,13 @@ from elbank.core.exceptions import (
     UnprocessableError,
 )
 from elbank.core.logging import get_logger
-from elbank.db.models import Account, Operation, OperationType, User
+from elbank.db.models import Account, Operation, User
 from elbank.kafka import EventPublisher, EventType
 from elbank.schemas.account import StatementJobStatus
+from elbank.services.categories import is_credit
 
 logger = get_logger(__name__)
 
-_CREDIT_TYPES = frozenset(
-    {
-        OperationType.TRANSFER_IN,
-        OperationType.CONVERSION_IN,
-        OperationType.INTEREST,
-        OperationType.CREDIT_DISBURSEMENT,
-        OperationType.DEPOSIT_CLOSE,
-        OperationType.INVESTMENT_SELL,
-    }
-)
 _CSV_HEADER = (
     "operation_id",
     "created_at",
@@ -194,7 +185,8 @@ class StatementService:
 # ---------- worker side ----------
 
 
-def _safe_cell(value: str | None) -> str:
+def safe_csv_cell(value: str | None) -> str:
+    """Neutralize a cell a spreadsheet would execute as a formula (CSV injection)."""
     if not value:
         return ""
     return "'" + value if value.startswith(_FORMULA_PREFIXES) else value
@@ -205,12 +197,12 @@ def _csv_row(op: Operation) -> tuple[str, ...]:
         str(op.id),
         op.created_at.isoformat(),
         op.type.value,
-        "credit" if op.type in _CREDIT_TYPES else "debit",
+        "credit" if is_credit(op.type) else "debit",
         format(op.amount, "f"),
         op.currency,
         op.status.value,
-        _safe_cell(op.counterparty_account),
-        _safe_cell(op.description),
+        safe_csv_cell(op.counterparty_account),
+        safe_csv_cell(op.description),
     )
 
 

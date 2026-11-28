@@ -329,6 +329,39 @@ class StatementSettings(_Section):
     consumer_group: str = "elbank-statements"
 
 
+class ExportSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="EXPORTS_")
+
+    # Generated files; /app/uploads/exports in docker-compose (shared by app and worker).
+    dir: Path = Path("uploads/exports")
+    # How long a job (and its file) is available after the request.
+    job_ttl_seconds: int = Field(default=24 * 3600, ge=60)
+    max_period_days: int = Field(default=366, ge=1)
+    # A PDF is rendered in memory: larger exports must use CSV.
+    pdf_max_rows: int = Field(default=5000, ge=1)
+    # TTF font with Cyrillic glyphs (the image installs fonts-dejavu-core).
+    pdf_font_path: Path = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    consumer_group: str = "elbank-exports"
+
+
+class AnalyticsSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="ANALYTICS_")
+
+    # Aggregates are cached per user and dropped on operation.completed.
+    cache_ttl_seconds: int = Field(default=300, ge=1)
+    max_period_days: int = Field(default=366, ge=1)
+
+
+class BudgetSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="BUDGETS_")
+
+    # notification.send level "warn" from this share of the limit, "danger" from 100 %.
+    warn_percent: Decimal = Field(default=Decimal(80), gt=0, lt=100)
+    max_per_user: int = Field(default=50, ge=1)
+    # Consumer of operation.completed: analytics cache invalidation + budget checks.
+    consumer_group: str = "elbank-operations"
+
+
 class TransferSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="TRANSFERS_")
 
@@ -390,6 +423,9 @@ class Settings(_Section):
     credits: CreditSettings = Field(default_factory=CreditSettings)
     deposits: DepositSettings = Field(default_factory=DepositSettings)
     statements: StatementSettings = Field(default_factory=StatementSettings)
+    exports: ExportSettings = Field(default_factory=ExportSettings)
+    analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
+    budgets: BudgetSettings = Field(default_factory=BudgetSettings)
     transfers: TransferSettings = Field(default_factory=TransferSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)
 

@@ -70,8 +70,9 @@ docker compose ps
 ```
 
 Сервис `migrate` выполняет `alembic upgrade head` и завершается, после чего стартуют `elbank-app`,
-`statement-worker` (консьюмер `statement.requested`) и `transfers-worker` (завершение переводов,
-разбор таймаутов внешних переводов и платежей).
+`statement-worker` (консьюмер `statement.requested`), `exports-worker` (консьюмер `export.requested`),
+`operations-worker` (консьюмер `operation.completed`: кэш аналитики и бюджеты), `deposit-worker` и
+`transfers-worker` (завершение переводов, разбор таймаутов внешних переводов и платежей).
 Сервис `kibana-setup` создаёт в Kibana data view `elbank-logs-*` и завершается.
 
 Порты по умолчанию (переопределяются в `.env`):
@@ -190,7 +191,7 @@ Redis не ломает `GET /` — ответ берётся из БД.
 `STATEMENTS_MAX_PERIOD_DAYS`, `to` не в будущем. Если Kafka недоступна, задача не создаётся (`503`).
 
 Локально воркеры запускаются отдельно: `uv run elbank-statements-worker`, `uv run elbank-transfers-worker`,
-`uv run elbank-deposits-worker`.
+`uv run elbank-deposits-worker`, `uv run elbank-exports-worker`, `uv run elbank-operations-worker`.
 
 ## Переводы
 
@@ -448,6 +449,59 @@ PAN приходит только от процессинга и в БД не п
 | брокер: отказ `INSUFFICIENT_LIQUIDITY`      | `quantity` > 10 000                      |
 
 Котировки: SBER, GAZP, LKOH, YDEX, GMKN, MTSS, ROSN, VTBR (`wiremock/__files/broker/quotes.json`).
+
+## История операций
+
+`/api/v1/operations` — операции по всем счетам клиента, в любом статусе (включая компенсации):
+
+| Метод и путь                       | Назначение                                                        |
+|------------------------------------|-------------------------------------------------------------------|
+| `GET /`                            | фильтры `from`, `to`, `account_id`, `type` или `type[]` (повторяемые), `status`, `amount_min`, `amount_max`; `page`, `size` (20, максимум 100); сортировка `created_at DESC` → `{items, total, page, size}` |
+| `GET /{id}`                        | детали: провайдер платежа, `error_code`, `parent_operation_id`, `reversed_operation_id`, ... |
+| `GET /export?format=csv\|pdf&from=&to=` | заказать экспорт → `202` + `job_id`                         |
+| `GET /exports/{job_id}`            | статус задачи и `download_url`                                    |
+| `GET /exports/{job_id}/file`       | скачать CSV/PDF                                                   |
+
+Периоды — целые дни UTC. Экспорт устроен как выписка: задача в Redis (`export_job:{job_id}`, TTL
+`EXPORTS_JOB_TTL_SECONDS`), событие `export.requested`, воркер `elbank-exports-worker` (сервис
+`exports-worker`) пишет `{EXPORTS_DIR}/{job_id}.{csv|pdf}` (в compose — `/app/uploads/exports`) и раз в
+час удаляет файлы старше TTL. PDF строится в памяти: больше `EXPORTS_PDF_MAX_ROWS` операций — задача
+`failed` с подсказкой выбрать CSV. Для кириллицы нужен TTF-шрифт `EXPORTS_PDF_FONT_PATH` (в образе —
+`fonts-dejavu-core`).
+
+## Аналитика и бюджеты
+
+Учитываются только проведённые деньги: операции `completed`, кроме компенсаций (отменённый перевод и
+его компенсации взаимно исключаются). Суммы всегда в разрезе валют.
+
+Категория расхода (`SpendingCategory`) — по типу операции, для платежей — по провайдеру:
+`utility` → `utilities`, `mobile`, `internet`, `tax` → `taxes`, `traffic_fine` → `fines`,
+`qr` → `qr_payments`, `receipt` → `bills`; переводы (внутренние, межбанковские, СБП) → `transfers`,
+`fee` → `fees`, погашение кредита → `loans`, открытие/пополнение вклада → `savings`, покупка бумаг →
+`investments`. Конвертации и переводы между своими счетами — не расход и не доход (их комиссии —
+расход).
+
+`/api/v1/analytics`:
+
+| Метод и путь                          | Назначение                                                  |
+|---------------------------------------|-------------------------------------------------------------|
+| `GET /categories?from=&to=`           | расходы по категориям: сумма, число операций, доля в валюте |
+| `GET /monthly?year=`                  | доходы/расходы/сальдо по 12 месяцам для каждой валюты       |
+| `GET /balance-dynamics?from=&to=[&account_id=]` | по дням: приход, расход, сальдо, нарастающий итог (внутренние движения учитываются) |
+
+Кэш: Redis-хэш `analytics:{user_id}`, поле на отчёт с параметрами, TTL поля
+`ANALYTICS_CACHE_TTL_SECONDS` (300 с, `HEXPIRE`). Хэш удаляет `operations-worker` по
+`operation.completed` любой операции на счетах клиента.
+
+`/api/v1/budgets`: `POST /` `{category, monthly_limit, currency=RUB}`, `GET /`, `GET /{id}`,
+`PATCH /{id}` `{monthly_limit}`, `DELETE /{id}`, `GET /status` — потрачено/лимит/остаток/процент и
+уровень `ok`/`warn`/`danger` за текущий месяц UTC. Один бюджет на категорию и валюту.
+
+Событие `operation.completed` публикуется для каждой операции, перешедшей в `completed`, после коммита
+транзакции (хук сессии в `elbank.services.operation_events`). `operations-worker` пересчитывает бюджет
+категории операции и шлёт `notification.send` с `level: warn` (от `BUDGETS_WARN_PERCENT`, 80 %) или
+`danger` (от 100 %) — каждый уровень один раз за месяц (маркер `budget_alert:{budget_id}:{YYYY-MM}:{level}`
+в Redis; смена лимита сбрасывает маркеры текущего месяца).
 
 ## Логи
 

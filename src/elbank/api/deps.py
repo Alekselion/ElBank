@@ -27,16 +27,20 @@ from elbank.deps import (
 )
 from elbank.services.account_cache import AccountListCache
 from elbank.services.accounts import AccountService
+from elbank.services.analytics import AnalyticsCache, AnalyticsService
 from elbank.services.auth import AuthService
+from elbank.services.budgets import BudgetAlerts, BudgetService
 from elbank.services.cards import CardService
 from elbank.services.conversion import ConversionService
 from elbank.services.credits import CreditService
 from elbank.services.deposits import DepositService
+from elbank.services.exports import ExportJobStore, ExportService
 from elbank.services.external_transfers import ExternalTransferService
 from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.investments import InvestmentService
 from elbank.services.kyc import KycService
 from elbank.services.ledger import OutgoingChecks
+from elbank.services.operations import OperationHistoryService
 from elbank.services.otp import OtpService
 from elbank.services.payments import PaymentService, TemplateService
 from elbank.services.profile import ProfileService
@@ -356,3 +360,41 @@ InvestmentServiceDep = Annotated[InvestmentService, Depends(get_investment_servi
 
 # Managers and admins: back-office endpoints.
 StaffUserDep = Annotated[User, Depends(require_roles(UserRole.MANAGER, UserRole.ADMIN))]
+
+
+def get_operation_history_service(session: DbSessionDep) -> OperationHistoryService:
+    return OperationHistoryService(session)
+
+
+OperationHistoryServiceDep = Annotated[
+    OperationHistoryService, Depends(get_operation_history_service)
+]
+
+
+def get_export_service(
+    redis: RedisDep, publisher: EventPublisherDep, settings: SettingsDep
+) -> ExportService:
+    store = ExportJobStore(redis, settings.exports.job_ttl_seconds)
+    return ExportService(store, publisher, settings.exports)
+
+
+ExportServiceDep = Annotated[ExportService, Depends(get_export_service)]
+
+
+def get_analytics_service(
+    session: DbSessionDep, redis: RedisDep, settings: SettingsDep
+) -> AnalyticsService:
+    cache = AnalyticsCache(redis, settings.analytics.cache_ttl_seconds)
+    return AnalyticsService(session, cache, settings.analytics)
+
+
+AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]
+
+
+def get_budget_service(
+    session: DbSessionDep, redis: RedisDep, settings: SettingsDep
+) -> BudgetService:
+    return BudgetService(session, BudgetAlerts(redis), settings.budgets)
+
+
+BudgetServiceDep = Annotated[BudgetService, Depends(get_budget_service)]
