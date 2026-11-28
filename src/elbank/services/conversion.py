@@ -112,12 +112,7 @@ class ConversionService:
             raise UnprocessableError("Amount is too small to convert")
 
         error = await self._checks.check(
-            source,
-            request.amount,
-            fee,
-            operation=OperationType.CONVERSION_OUT,
-            target=target,
-            apply_limits=False,
+            source, request.amount, fee, target=target, apply_limits=False
         )
         main = self._ops.create_pending(
             account_id=source.id,

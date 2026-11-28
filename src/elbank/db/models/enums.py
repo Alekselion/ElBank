@@ -166,6 +166,7 @@ class TicketCategory(StrEnum):
     DEPOSITS = "deposits"
     INVESTMENTS = "investments"
     TECHNICAL = "technical"  # app / login problems
+    FRAUD = "fraud"  # opened automatically when an operation is held by an anti-fraud rule
     OTHER = "other"
 
 
@@ -174,6 +175,12 @@ class TicketPriority(StrEnum):
     NORMAL = "normal"
     HIGH = "high"
     URGENT = "urgent"
+
+
+class FraudCaseStatus(StrEnum):
+    OPEN = "open"  # the operation is held (pending) until a manager decides
+    CONFIRMED = "confirmed"  # released: the operation continues
+    REJECTED = "rejected"  # the operation failed, the money is returned
 
 
 class TariffCode(StrEnum):

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from redis.asyncio import Redis
 
-from elbank.clients.sms import SmsClient, SmsGatewayError, mask_phone
+from elbank.clients.sms import SmsClient, SmsGatewayError
 from elbank.core.config import Settings
 from elbank.core.exceptions import (
     ExternalServiceError,
@@ -28,6 +28,7 @@ from elbank.core.exceptions import (
     TooManyRequestsError,
 )
 from elbank.core.logging import get_logger
+from elbank.core.pii import mask_phone
 from elbank.core.security import (
     InvalidTokenError,
     IssuedToken,

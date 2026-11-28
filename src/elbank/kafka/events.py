@@ -59,6 +59,8 @@ class EventType(StrEnum):
     TICKET_CREATED = "ticket.created"
     TICKET_UPDATED = "ticket.updated"
     RECONCILIATION_REQUESTED = "reconciliation.requested"
+    AUDIT_EVENT = "audit.event"
+    FRAUD_SUSPICIOUS = "fraud.suspicious"
 
 
 class EventEnvelope(BaseModel):

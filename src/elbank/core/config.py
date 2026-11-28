@@ -418,9 +418,9 @@ class ElasticSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="ELASTIC_")
 
     url: str = "http://localhost:9200"
-    # Audit trail written by Logstash (log_type=audit), read by GET /api/v1/admin/audit.
-    audit_index_pattern: str = "elbank-audit-*"
     timeout_seconds: float = Field(default=5.0, gt=0)
+    # Audit worker: audit.event -> elbank-audit-YYYY.MM.DD.
+    audit_consumer_group: str = "elbank-audit"
 
 
 class ReconciliationSettings(_Section):

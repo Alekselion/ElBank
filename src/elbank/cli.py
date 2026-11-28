@@ -2,7 +2,7 @@
 
 ``elbank-set-role --phone +79991234567 --role admin`` gives a registered user a role.
 It is the way to appoint the first admin (``POST /api/v1/admin/users/{id}/role``
-needs an admin already); it is recorded in the audit trail with ``actor_id=null``.
+needs an admin already); it is recorded in the audit trail (``audit.event``) with ``user_id=null``.
 
 In docker-compose: ``docker compose run --rm elbank-app elbank-set-role --phone ... --role admin``.
 """
@@ -13,11 +13,12 @@ import sys
 
 from sqlalchemy import select
 
-from elbank.core.audit import audit
 from elbank.core.config import get_settings
 from elbank.core.logging import setup_logging
 from elbank.db.models import User, UserRole, UserStatus
 from elbank.db.session import create_engine, create_session_factory
+from elbank.kafka import EventPublisher, KafkaProducer
+from elbank.services.audit_service import AuditService
 
 
 async def _set_role(phone: str, role: UserRole) -> str:
@@ -36,14 +37,17 @@ async def _set_role(phone: str, role: UserRole) -> str:
     finally:
         await engine.dispose()
 
-    audit(
-        "cli.user.role_change",
-        actor_id=None,
-        user_id=user.id,
-        entity="user",
-        entity_id=user.id,
-        details={"from": previous, "to": role},
-    )
+    kafka = KafkaProducer(settings.kafka)
+    try:
+        await AuditService(EventPublisher(kafka)).record(
+            "cli.user.role_change",
+            user_id=None,  # operator at the console
+            entity="user",
+            entity_id=user.id,
+            payload={"from": previous, "to": role},
+        )
+    finally:
+        await kafka.stop()
     return f"user {user.id}: role {previous.value} -> {role.value}"
 
 

@@ -16,12 +16,12 @@ from redis.exceptions import RedisError
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from elbank.core.audit import audit
 from elbank.core.config import JwtSettings
 from elbank.core.exceptions import InvalidStateError, NotFoundError, PermissionDeniedError
 from elbank.core.logging import get_logger
 from elbank.db.models import User, UserRole, UserStatus
 from elbank.kafka import EventPublisher, EventType
+from elbank.services.audit_service import AuditService
 from elbank.services.sessions import SessionService
 
 logger = get_logger(__name__)
@@ -48,6 +48,7 @@ class AdminUserService:
     ) -> None:
         self._session = session
         self._publisher = publisher
+        self._audit_service = AuditService(publisher)
         self._sessions = SessionService(session, redis, jwt)
 
     async def search(self, filters: UserFilter, page: int, size: int) -> tuple[list[User], int]:
@@ -89,7 +90,7 @@ class AdminUserService:
             # Access tokens are still rejected: every request re-reads the user status.
             logger.warning("access token revocation marker not set", error=str(exc))
 
-        self._audit("admin.user.block", staff, user, {"reason": reason})
+        await self._audit("admin.user.block", staff, user, {"reason": reason})
         await self._publisher.publish_safely(
             EventType.USER_BLOCKED,
             {"user_id": str(user.id), "blocked_by": str(staff.id), "reason": reason},
@@ -104,7 +105,7 @@ class AdminUserService:
         user.status = UserStatus.ACTIVE
         await self._session.commit()
 
-        self._audit("admin.user.unblock", staff, user, {})
+        await self._audit("admin.user.unblock", staff, user, {})
         await self._publisher.publish_safely(
             EventType.USER_UNBLOCKED,
             {"user_id": str(user.id), "unblocked_by": str(staff.id)},
@@ -123,7 +124,7 @@ class AdminUserService:
             return user
         user.role = role
         await self._session.commit()
-        self._audit("admin.user.role_change", admin, user, {"from": previous, "to": role})
+        await self._audit("admin.user.role_change", admin, user, {"from": previous, "to": role})
         return user
 
     async def _target(self, staff: User, user_id: uuid.UUID) -> User:
@@ -143,14 +144,14 @@ class AdminUserService:
             raise NotFoundError("User not found")
         return user
 
-    @staticmethod
-    def _audit(action: str, staff: User, user: User, details: dict[str, object]) -> None:
-        audit(
+    async def _audit(
+        self, action: str, staff: User, user: User, details: dict[str, object]
+    ) -> None:
+        await self._audit_service.record(
             action,
-            actor_id=staff.id,
-            user_id=user.id,
+            user_id=staff.id,
             entity="user",
             entity_id=user.id,
-            details={**details, "actor_role": staff.role},
+            payload={**details, "actor_role": staff.role},
         )
         logger.info(action, user_id=str(user.id), actor_id=str(staff.id))

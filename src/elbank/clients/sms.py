@@ -4,10 +4,9 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from elbank.core.logging import get_logger
+from elbank.core.pii import mask_phone
 
 logger = get_logger(__name__)
-
-_MIN_MASKABLE_PHONE_LEN = 10
 
 
 class SmsSendResult(BaseModel):
@@ -17,11 +16,6 @@ class SmsSendResult(BaseModel):
 
 class SmsGatewayError(Exception):
     """The SMS gateway is unreachable or rejected the message."""
-
-
-def mask_phone(phone: str) -> str:
-    """``+79991234567`` -> ``+7999***4567`` (for logs and events)."""
-    return f"{phone[:5]}***{phone[-4:]}" if len(phone) >= _MIN_MASKABLE_PHONE_LEN else "***"
 
 
 class SmsClient:

@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 
 from elbank import __version__
 from elbank.api import api_router
-from elbank.api.middleware import CorrelationIdMiddleware
+from elbank.api.middleware import AuditMiddleware, CorrelationIdMiddleware
 from elbank.clients import create_http_client
 from elbank.core.config import Settings, get_settings
 from elbank.core.exceptions import AppError
@@ -87,6 +87,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    # The last added middleware is the outermost: correlation id first, then audit.
+    app.add_middleware(AuditMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
     app.add_exception_handler(AppError, app_error_handler)
     app.include_router(api_router)

@@ -6,7 +6,9 @@ with the mandatory fields::
 
     timestamp, level, logger, message, correlation_id, service, env
 
-plus any extra key/values passed to the logger. The same JSON is written to
+plus any extra key/values passed to the logger. PII is masked in every record
+before it is rendered (:mod:`elbank.core.pii`): secrets/documents by key, phone and
+card numbers anywhere in text. The same JSON is written to
 stdout and sent asynchronously to Logstash over TCP (one object per line).
 
 Logstash being unavailable never breaks or blocks the application: events are
@@ -22,6 +24,7 @@ import structlog
 from logstash_async.handler import AsynchronousLogstashHandler
 
 from elbank.core.config import Settings
+from elbank.core.pii import redact
 
 LOGSTASH_EVENT_TTL_SECONDS = 300
 
@@ -45,6 +48,17 @@ def _static_fields(settings: Settings) -> structlog.typing.Processor:
 def _uppercase_level(_: Any, __: str, event_dict: EventDict) -> EventDict:
     if isinstance(level := event_dict.get("level"), str):
         event_dict["level"] = level.upper()
+    return event_dict
+
+
+_NOT_REDACTED = frozenset({"timestamp", "level", "logger", "correlation_id", "service", "env"})
+
+
+def _redact_pii(_: Any, __: str, event_dict: EventDict) -> EventDict:
+    """Last line of defence: mask PII that reached a log record (see core.pii)."""
+    for key, value in list(event_dict.items()):
+        if key not in _NOT_REDACTED:
+            event_dict[key] = redact({key: value})[key]
     return event_dict
 
 
@@ -72,6 +86,7 @@ def _json_formatter(settings: Settings) -> logging.Formatter:
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             _uppercase_level,
             structlog.processors.dict_tracebacks,
+            _redact_pii,
             structlog.processors.EventRenamer("message"),
             _required_keys_first,
             structlog.processors.JSONRenderer(default=str),
@@ -84,6 +99,7 @@ def _console_formatter(settings: Settings) -> logging.Formatter:
         foreign_pre_chain=[*_pre_chain(settings), structlog.stdlib.ExtraAdder()],
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            _redact_pii,
             structlog.dev.ConsoleRenderer(colors=True),
         ],
     )

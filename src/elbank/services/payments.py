@@ -22,6 +22,11 @@ transaction is held while the provider is called:
 
 An unconfirmed payment is failed (with a refund and ``payment.failed``) by
 :class:`PaymentTimeoutResolver` in the transfers worker, like external transfers.
+
+Anti-fraud hold: the money is debited, the operation stays ``pending`` (``FRAUD_REVIEW``)
+and the order ``created``; the provider is not called. Confirmation continues from
+step 2 (:meth:`PaymentService.continue_held`); rejection fails both with
+``FRAUD_REJECTED`` and refunds the money.
 """
 
 import uuid
@@ -44,6 +49,7 @@ from elbank.core.exceptions import (
 )
 from elbank.core.logging import get_logger
 from elbank.db.models import (
+    Account,
     Currency,
     Operation,
     OperationStatus,
@@ -58,6 +64,7 @@ from elbank.kafka import EventPublisher, EventType
 from elbank.schemas.payment import TemplateWrite
 from elbank.services.account_cache import AccountListCache
 from elbank.services.external_transfers import lock_unconfirmed
+from elbank.services.fraud_service import FraudService, held
 from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.ledger import OutgoingChecks, TransferErrorCode, lock_accounts
 from elbank.services.operation_service import OperationService
@@ -141,6 +148,7 @@ class PaymentService:
         checks: OutgoingChecks,
         *,
         providers: ProviderClient,
+        fraud: FraudService,
         cache: AccountListCache,
         publisher: EventPublisher,
     ) -> None:
@@ -148,6 +156,7 @@ class PaymentService:
         self._guard = guard
         self._checks = checks
         self._providers = providers
+        self._fraud = fraud
         self._cache = cache
         self._publisher = publisher
         self._ops = OperationService(session)
@@ -175,9 +184,9 @@ class PaymentService:
 
         async def execute() -> PaymentResult:
             view, payer_account = await self._debit(request)
-            if view.order.status is PaymentOrderStatus.FAILED:
+            if view.order.status is PaymentOrderStatus.FAILED or held(view.operation):
                 return PaymentResult(view, created=True)
-            outcome = await self._call(view, request, payer_account)
+            outcome = await self._call(view, payer_account)
             return PaymentResult(await self._apply(view.operation.id, outcome), created=True)
 
         return await self._guard.run(
@@ -204,9 +213,7 @@ class PaymentService:
         if account.currency != Currency.RUB:
             raise UnprocessableError("Payments are made from RUB accounts only")
 
-        error = await self._checks.check(
-            account, request.amount, Decimal(0), operation=OperationType.PAYMENT
-        )
+        error = await self._checks.check(account, request.amount, Decimal(0))
         operation = self._ops.create_pending(
             account_id=account.id,
             user_id=request.user.id,
@@ -235,7 +242,16 @@ class PaymentService:
             await self._publish(EventType.PAYMENT_FAILED, view)
             return view, account.number
 
+        hits = await self._fraud.evaluate(
+            account, request.amount, Decimal(0), OperationType.PAYMENT
+        )
         account.balance -= request.amount
+        if hits:
+            hold = await self._fraud.hold(operation, request.user, hits)
+            await self._session.commit()
+            await self._cache.invalidate(request.user.id)
+            await self._fraud.announce(hold)
+            return view, account.number
         self._ops.mark_processing(operation)
         _set_order_status(order, PaymentOrderStatus.SENT)
         await self._session.commit()
@@ -244,15 +260,15 @@ class PaymentService:
         return view, account.number
 
     async def _call(
-        self, view: PaymentView, request: PaymentRequest, payer_account: str
+        self, view: PaymentView, payer_account: str
     ) -> ProviderResponse | TransferErrorCode:
         try:
             return await self._providers.pay(
-                request.provider,
+                view.order.provider,
                 payment_id=view.order.id,
                 payer_account=payer_account,
-                amount=request.amount,
-                payload=request.payload,
+                amount=view.operation.amount,
+                payload=view.order.payload,
             )
         except ExternalTimeoutError:
             return TransferErrorCode.EXTERNAL_TIMEOUT
@@ -313,6 +329,34 @@ class PaymentService:
         )
         await self._publish(EventType.PAYMENT_FAILED, view, reason)
         return view
+
+    # ---------- anti-fraud decisions ----------
+
+    async def release_held(self, operation: Operation) -> None:
+        """Confirmed (operation locked by the caller, who commits): ``processing`` / ``sent``."""
+        order = await _lock_order(self._session, operation.id)
+        self._ops.mark_processing(operation)
+        operation.error_code = None
+        _set_order_status(order, PaymentOrderStatus.SENT)
+
+    async def continue_held(self, operation: Operation) -> PaymentView:
+        """After the confirmation is committed: call the provider and apply its answer."""
+        view = await self._view_of(operation)
+        account = await self._session.get(Account, operation.account_id)
+        assert account is not None
+        return await self._apply(operation.id, await self._call(view, account.number))
+
+    async def reject_held(self, operation: Operation) -> tuple[PaymentView, list[Account]]:
+        """Rejected (operation locked by the caller, who commits): failed, money returned."""
+        order = await _lock_order(self._session, operation.id)
+        self._ops.mark_failed(operation, TransferErrorCode.FRAUD_REJECTED)
+        _set_order_status(order, PaymentOrderStatus.FAILED)
+        account = (await lock_accounts(self._session, {operation.account_id}))[operation.account_id]
+        account.balance += operation.amount
+        return PaymentView(order, operation), [account]
+
+    async def publish_failed(self, view: PaymentView) -> None:
+        await self._publish(EventType.PAYMENT_FAILED, view, "Rejected by the security service")
 
     async def _view_of(self, operation: Operation) -> PaymentView:
         order = await self._session.scalar(

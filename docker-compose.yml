@@ -186,6 +186,26 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  # Kafka consumer of audit.event: writes every audit event to Elasticsearch
+  # (elbank-audit-YYYY.MM.DD). Waits for Elasticsearch and installs the index template.
+  audit-worker:
+    build: .
+    image: elbank:latest
+    env_file: .env
+    environment: *app-env
+    command: ["elbank-audit-worker"]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      elasticsearch:
+        condition: service_healthy
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      disable: true  # no HTTP port; the process exits (and restarts) on fatal errors
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   # Kafka consumer of reconciliation.requested: checks the ledger of a period and writes
   # a JSON report to the shared uploads volume (/app/uploads/recon), served by elbank-app.
   reconciliation-worker:
@@ -318,6 +338,7 @@ services:
         investment.order.created
         ticket.created ticket.updated
         reconciliation.requested
+        audit.event fraud.suspicious
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -398,7 +419,6 @@ services:
       - "5000:5000"
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
-      - ./logstash/templates:/usr/share/logstash/templates:ro
       - ls_data:/usr/share/logstash/data
     depends_on:
       elasticsearch:
@@ -443,7 +463,7 @@ services:
           -d '{"data_view_id": "elbank-logs", "force": true}' > /dev/null
         curl -fsS -X POST http://kibana:5601/api/data_views/data_view \
           -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
-          -d '{"override": true, "data_view": {"id": "elbank-audit", "name": "ElBank audit", "title": "elbank-audit-*", "timeFieldName": "@timestamp"}}' > /dev/null
+          -d '{"override": true, "data_view": {"id": "elbank-audit", "name": "ElBank audit", "title": "elbank-audit-*", "timeFieldName": "timestamp"}}' > /dev/null
         echo "Kibana data views elbank-logs-* and elbank-audit-* are ready"
     depends_on:
       kibana:

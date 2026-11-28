@@ -49,7 +49,7 @@ class MessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    author_id: uuid.UUID
+    author_id: uuid.UUID | None = Field(description="null: automatic message of the bank")
     from_staff: bool
     body: str
     created_at: datetime

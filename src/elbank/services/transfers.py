@@ -13,6 +13,12 @@ Lifecycle of an internal transfer (all status changes go through :class:`Operati
 3. Then :class:`TransferFinalizer` (the transfers worker) moves the operations
    ``pending → processing → completed`` and publishes ``transfer.completed``.
 
+Anti-fraud hold (:mod:`elbank.services.fraud_service`): the source is debited but the
+recipient is **not** credited; ``transfer_out`` keeps ``error_code=FRAUD_REVIEW``, the
+finalizer skips it and the client cannot cancel it. :meth:`TransferService.release_held`
+credits the recipient and clears the hold (the finalizer then completes the transfer);
+:meth:`TransferService.reject_held` fails every posting and refunds ``amount + fee``.
+
 Idempotency: see :mod:`elbank.services.idempotency`.
 """
 
@@ -44,9 +50,11 @@ from elbank.db.models import (
 from elbank.kafka import EventPublisher, EventType
 from elbank.schemas.transfer import TransferChannel
 from elbank.services.account_cache import AccountListCache
+from elbank.services.fraud_service import FraudService, held
 from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.ledger import (
     OutgoingChecks,
+    TransferErrorCode,
     child_postings,
     lock_accounts,
 )
@@ -90,6 +98,7 @@ class TransferService:
         checks: OutgoingChecks,
         *,
         tariffs: TariffService,
+        fraud: FraudService,
         cache: AccountListCache,
         publisher: EventPublisher,
         settings: TransferSettings,
@@ -98,6 +107,7 @@ class TransferService:
         self._guard = guard
         self._checks = checks
         self._tariffs = tariffs
+        self._fraud = fraud
         self._cache = cache
         self._publisher = publisher
         self._settings = settings
@@ -140,9 +150,7 @@ class TransferService:
             raise UnprocessableError("Transfer currency must match both accounts' currency")
 
         fee = (await self._tariffs.fee_rule(TariffCode.INTERNAL_TRANSFER)).fee(request.amount)
-        error = await self._checks.check(
-            source, request.amount, fee, operation=OperationType.TRANSFER_OUT, target=target
-        )
+        error = await self._checks.check(source, request.amount, fee, target=target)
         transfer = self._ops.create_pending(
             account_id=source.id,
             user_id=request.user.id,
@@ -164,8 +172,10 @@ class TransferService:
             )
             return TransferResult(view, created=True)
 
+        hits = await self._fraud.evaluate(source, request.amount, fee, OperationType.TRANSFER_OUT)
         source.balance -= request.amount + fee
-        target.balance += request.amount
+        if not hits:  # a held transfer reaches the recipient only after confirmation
+            target.balance += request.amount
         self._ops.create_pending(
             account_id=target.id,
             type=OperationType.TRANSFER_IN,
@@ -184,8 +194,11 @@ class TransferService:
                 parent_operation_id=transfer.id,
                 description="Internal transfer fee",
             )
+        hold = await self._fraud.hold(transfer, request.user, hits) if hits else None
         await self._session.commit()
         await self._invalidate(source, target)
+        if hold is not None:
+            await self._fraud.announce(hold)
 
         logger.info(
             "transfer accepted",
@@ -217,6 +230,8 @@ class TransferService:
             raise InvalidStateError("Only internal transfers can be cancelled")
         if transfer.status not in CANCELLABLE_STATUSES:
             raise InvalidStateError(f"Transfer is already {transfer.status.value}")
+        if held(transfer):
+            raise InvalidStateError("Transfer is being checked by the security service")
         if datetime.now(UTC) > transfer.created_at + self._window:
             # Not finalized yet only because the worker lags behind: still too late.
             raise InvalidStateError("Cancellation window has expired")
@@ -267,6 +282,45 @@ class TransferService:
         else:
             account.balance += posting.amount
 
+    # ---------- anti-fraud decisions (transfer locked by the caller, who commits) ----------
+
+    async def release_held(self, transfer: Operation) -> list[Account]:
+        """Confirmed: credit the recipient; the finalizer then completes the transfer.
+
+        Returns the accounts whose balance changed.
+        """
+        credit = await self._credit_posting(transfer)
+        accounts = await lock_accounts(self._session, {credit.account_id})
+        accounts[credit.account_id].balance += credit.amount
+        transfer.error_code = None
+        return list(accounts.values())
+
+    async def reject_held(self, transfer: Operation) -> tuple[TransferView, list[Account]]:
+        """Rejected: every posting fails, the source gets ``amount + fee`` back."""
+        postings = [transfer, *await child_postings(self._session, [transfer.id])]
+        source = (await lock_accounts(self._session, {transfer.account_id}))[transfer.account_id]
+        target_id, fee = transfer.account_id, Decimal(0)
+        for posting in postings:
+            self._ops.mark_failed(posting, TransferErrorCode.FRAUD_REJECTED)
+            if posting.type is OperationType.TRANSFER_IN:
+                target_id = posting.account_id  # never credited while held
+            else:  # transfer_out and fee were debited from the source
+                source.balance += posting.amount
+                if posting.type is OperationType.FEE:
+                    fee = posting.amount
+        return TransferView(transfer, TransferChannel.INTERNAL, target_id, fee), [source]
+
+    async def publish_failed(self, view: TransferView) -> None:
+        await self._publisher.publish_safely(
+            EventType.TRANSFER_FAILED, transfer_payload(view), key=str(view.operation.account_id)
+        )
+
+    async def _credit_posting(self, transfer: Operation) -> Operation:
+        for posting in await child_postings(self._session, [transfer.id]):
+            if posting.type is OperationType.TRANSFER_IN:
+                return posting
+        raise RuntimeError(f"transfer_in of transfer {transfer.id} is missing")
+
     # ---------- internals ----------
 
     @property
@@ -308,6 +362,8 @@ class TransferFinalizer:
                         Operation.parent_operation_id.is_(None),
                         Operation.status == OperationStatus.PENDING,
                         Operation.created_at <= deadline,
+                        # Held by anti-fraud rules: waits for a manager's decision.
+                        Operation.error_code.is_distinct_from(TransferErrorCode.FRAUD_REVIEW),
                     )
                     .order_by(Operation.created_at)
                     .limit(self._settings.finalizer_batch_size)

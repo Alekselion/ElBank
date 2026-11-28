@@ -14,11 +14,11 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from elbank.core.audit import audit
 from elbank.core.config import TransferSettings
 from elbank.core.logging import get_logger
 from elbank.db.models import Tariff, TariffCode, User
 from elbank.schemas.admin import FeeRule
+from elbank.services.audit_service import AuditService
 
 logger = get_logger(__name__)
 
@@ -41,8 +41,11 @@ def default_rule(code: TariffCode, settings: TransferSettings) -> FeeRule:
 
 
 class TariffService:
-    def __init__(self, session: AsyncSession, settings: TransferSettings) -> None:
+    def __init__(
+        self, session: AsyncSession, settings: TransferSettings, audit: AuditService
+    ) -> None:
         self._session = session
+        self._audit = audit
         self._settings = settings
 
     async def fee_rule(self, code: TariffCode) -> FeeRule:
@@ -86,13 +89,12 @@ class TariffService:
                 "reset": rule is None,
             }
         await self._session.commit()
-        audit(
+        await self._audit.record(
             "admin.tariffs.update",
-            actor_id=admin.id,
             user_id=admin.id,
             entity="tariff",
             entity_id=",".join(sorted(changes)),
-            details=changes,
+            payload=changes,
         )
         logger.info("tariffs updated", codes=sorted(changes))
         return await self.list_all()

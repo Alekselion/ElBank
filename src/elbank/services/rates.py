@@ -27,11 +27,11 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from elbank.clients.cbr import CbrClient, CbrDailyRates, CbrError
-from elbank.core.audit import audit
 from elbank.core.config import CbrSettings
 from elbank.core.exceptions import ExternalServiceError, NotFoundError, UnprocessableError
 from elbank.core.logging import get_logger
 from elbank.db.models import Currency, RateOverride, User
+from elbank.services.audit_service import AuditService
 
 logger = get_logger(__name__)
 
@@ -68,9 +68,15 @@ def _quantize(rate: Decimal) -> Decimal:
 
 class RatesService:
     def __init__(
-        self, session: AsyncSession, redis: Redis, cbr: CbrClient, settings: CbrSettings
+        self,
+        session: AsyncSession,
+        redis: Redis,
+        cbr: CbrClient,
+        settings: CbrSettings,
+        audit: AuditService,
     ) -> None:
         self._session = session
+        self._audit = audit
         self._redis = redis
         self._cbr = cbr
         self._settings = settings
@@ -124,13 +130,12 @@ class RatesService:
             override.updated_by_id = admin.id
         await self._session.commit()
         await self._invalidate(base, quote)
-        audit(
+        await self._audit.record(
             "admin.rate.override",
-            actor_id=admin.id,
             user_id=admin.id,
             entity="rate",
             entity_id=f"{base.value}-{quote.value}",
-            details={"previous": previous, "rate": rate},
+            payload={"previous": previous, "rate": rate},
         )
         logger.info("rate override set", base=base.value, quote=quote.value, rate=str(rate))
         return override
@@ -143,13 +148,12 @@ class RatesService:
         await self._session.delete(override)
         await self._session.commit()
         await self._invalidate(base, quote)
-        audit(
+        await self._audit.record(
             "admin.rate.override_removed",
-            actor_id=admin.id,
             user_id=admin.id,
             entity="rate",
             entity_id=f"{base.value}-{quote.value}",
-            details={"previous": previous},
+            payload={"previous": previous},
         )
         logger.info("rate override removed", base=base.value, quote=quote.value)
 

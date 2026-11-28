@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +34,7 @@ from elbank.services.accounts import AccountService
 from elbank.services.admin_users import AdminUserService
 from elbank.services.analytics import AnalyticsCache, AnalyticsService
 from elbank.services.audit_search import AuditSearchService
+from elbank.services.audit_service import AuditService
 from elbank.services.auth import AuthService
 from elbank.services.budgets import BudgetAlerts, BudgetService
 from elbank.services.cards import CardService
@@ -43,7 +44,8 @@ from elbank.services.deposits import DepositService
 from elbank.services.exports import ExportJobStore, ExportService
 from elbank.services.external_transfers import ExternalTransferService
 from elbank.services.faq import FaqService
-from elbank.services.fraud import FraudRuleService
+from elbank.services.fraud_review import FraudReviewService
+from elbank.services.fraud_service import FraudRuleService, FraudService
 from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.investments import InvestmentService
 from elbank.services.kyc import KycService
@@ -60,6 +62,22 @@ from elbank.services.statements import StatementJobStore, StatementService
 from elbank.services.support import TicketService
 from elbank.services.tariffs import TariffService
 from elbank.services.transfers import TransferService
+
+
+def get_audit_service(publisher: EventPublisherDep) -> AuditService:
+    return AuditService(publisher)
+
+
+AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
+
+
+def get_fraud_service(
+    session: DbSessionDep, publisher: EventPublisherDep, audit: AuditServiceDep
+) -> FraudService:
+    return FraudService(session, publisher, audit)
+
+
+FraudServiceDep = Annotated[FraudService, Depends(get_fraud_service)]
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /api/v1/auth/login")
 
@@ -87,6 +105,7 @@ async def authenticate_access_token(
 
 
 async def get_current_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     session: DbSessionDep,
     redis: RedisDep,
@@ -95,6 +114,8 @@ async def get_current_user(
     if credentials is None:
         raise AuthenticationError("Missing bearer token")
     user, _ = await authenticate_access_token(credentials.credentials, session, redis, settings)
+    # Read by AuditMiddleware after the response (request.state lives in the ASGI scope).
+    request.state.audit_user_id = user.id
     return user
 
 
@@ -214,8 +235,10 @@ def get_outgoing_checks(session: DbSessionDep, settings: SettingsDep) -> Outgoin
 OutgoingChecksDep = Annotated[OutgoingChecks, Depends(get_outgoing_checks)]
 
 
-def get_tariff_service(session: DbSessionDep, settings: SettingsDep) -> TariffService:
-    return TariffService(session, settings.transfers)
+def get_tariff_service(
+    session: DbSessionDep, settings: SettingsDep, audit: AuditServiceDep
+) -> TariffService:
+    return TariffService(session, settings.transfers, audit)
 
 
 TariffServiceDep = Annotated[TariffService, Depends(get_tariff_service)]
@@ -227,6 +250,7 @@ def get_transfer_service(
     guard: IdempotencyGuardDep,
     checks: OutgoingChecksDep,
     tariffs: TariffServiceDep,
+    fraud: FraudServiceDep,
     cache: AccountCacheDep,
     publisher: EventPublisherDep,
     settings: SettingsDep,
@@ -236,6 +260,7 @@ def get_transfer_service(
         guard,
         checks,
         tariffs=tariffs,
+        fraud=fraud,
         cache=cache,
         publisher=publisher,
         settings=settings.transfers,
@@ -252,6 +277,7 @@ def get_external_transfer_service(
     checks: OutgoingChecksDep,
     interbank: InterbankClientDep,
     sbp: SbpClientDep,
+    fraud: FraudServiceDep,
     cache: AccountCacheDep,
     publisher: EventPublisherDep,
     settings: SettingsDep,
@@ -262,6 +288,7 @@ def get_external_transfer_service(
         checks,
         interbank=interbank,
         sbp=sbp,
+        fraud=fraud,
         cache=cache,
         publisher=publisher,
         bank=settings.bank,
@@ -275,9 +302,13 @@ ExternalTransferServiceDep = Annotated[
 
 
 def get_rates_service(
-    session: DbSessionDep, redis: RedisDep, cbr: CbrClientDep, settings: SettingsDep
+    session: DbSessionDep,
+    redis: RedisDep,
+    cbr: CbrClientDep,
+    settings: SettingsDep,
+    audit: AuditServiceDep,
 ) -> RatesService:
-    return RatesService(session, redis, cbr, settings.cbr)
+    return RatesService(session, redis, cbr, settings.cbr, audit)
 
 
 RatesServiceDep = Annotated[RatesService, Depends(get_rates_service)]
@@ -315,11 +346,18 @@ def get_payment_service(
     guard: IdempotencyGuardDep,
     checks: OutgoingChecksDep,
     providers: ProviderClientDep,
+    fraud: FraudServiceDep,
     cache: AccountCacheDep,
     publisher: EventPublisherDep,
 ) -> PaymentService:
     return PaymentService(
-        session, guard, checks, providers=providers, cache=cache, publisher=publisher
+        session,
+        guard,
+        checks,
+        providers=providers,
+        fraud=fraud,
+        cache=cache,
+        publisher=publisher,
     )
 
 
@@ -473,15 +511,15 @@ def get_admin_user_service(
 AdminUserServiceDep = Annotated[AdminUserService, Depends(get_admin_user_service)]
 
 
-def get_fraud_rule_service(session: DbSessionDep) -> FraudRuleService:
-    return FraudRuleService(session)
+def get_fraud_rule_service(session: DbSessionDep, audit: AuditServiceDep) -> FraudRuleService:
+    return FraudRuleService(session, audit)
 
 
 FraudRuleServiceDep = Annotated[FraudRuleService, Depends(get_fraud_rule_service)]
 
 
-def get_audit_search_service(resources: ResourcesDep, settings: SettingsDep) -> AuditSearchService:
-    return AuditSearchService(resources.elastic, settings.elastic)
+def get_audit_search_service(resources: ResourcesDep) -> AuditSearchService:
+    return AuditSearchService(resources.elastic)
 
 
 AuditSearchServiceDep = Annotated[AuditSearchService, Depends(get_audit_search_service)]
@@ -494,3 +532,27 @@ def get_reconciliation_service(
 
 
 ReconciliationServiceDep = Annotated[ReconciliationService, Depends(get_reconciliation_service)]
+
+
+def get_fraud_review_service(
+    *,
+    session: DbSessionDep,
+    transfers: TransferServiceDep,
+    external: ExternalTransferServiceDep,
+    payments: PaymentServiceDep,
+    cache: AccountCacheDep,
+    publisher: EventPublisherDep,
+    audit: AuditServiceDep,
+) -> FraudReviewService:
+    return FraudReviewService(
+        session,
+        transfers=transfers,
+        external=external,
+        payments=payments,
+        cache=cache,
+        publisher=publisher,
+        audit=audit,
+    )
+
+
+FraudReviewServiceDep = Annotated[FraudReviewService, Depends(get_fraud_review_service)]

@@ -1,7 +1,7 @@
-"""Reading the audit trail from Elasticsearch (``elbank-audit-*``, written by Logstash).
+"""Reading the audit trail from Elasticsearch (``elbank-audit-*``, see :mod:`audit_service`).
 
-The database is not involved: audit records exist only as log events, see
-:mod:`elbank.core.audit`.
+The database is not involved: audit events exist only in Elasticsearch, written
+by the audit worker from ``audit.event``.
 """
 
 import uuid
@@ -16,45 +16,21 @@ from elasticsearch import ApiError, AsyncElasticsearch
 from elbank.core.config import ElasticSettings
 from elbank.core.exceptions import ExternalServiceError
 from elbank.core.logging import get_logger
+from elbank.services.audit_service import AUDIT_INDEX_PATTERN, AuditEvent
 
 logger = get_logger(__name__)
 
 # from + size of a plain search; deeper pages need a narrower period.
 MAX_RESULT_WINDOW = 10_000
 
-_SOURCE_FIELDS = [
-    "@timestamp",
-    "action",
-    "actor_id",
-    "user_id",
-    "entity",
-    "entity_id",
-    "details",
-    "correlation_id",
-    "service",
-]
-
 
 @dataclass(frozen=True, slots=True)
 class AuditQuery:
-    user_id: uuid.UUID | None = None  # actor or subject of the event
+    # Who acted (user_id), or the user the action was about (entity=user, entity_id).
+    user_id: uuid.UUID | None = None
     action: str | None = None  # exact, or a prefix ending with "*": "admin.user.*"
     date_from: datetime | None = None
     date_to: datetime | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AuditRecord:
-    id: str
-    timestamp: datetime
-    action: str
-    actor_id: uuid.UUID | None
-    user_id: uuid.UUID | None
-    entity: str | None
-    entity_id: str | None
-    details: dict[str, Any]
-    correlation_id: str | None
-    service: str | None
 
 
 def create_elastic_client(settings: ElasticSettings) -> AsyncElasticsearch:
@@ -74,7 +50,17 @@ def _build_query(query: AuditQuery) -> dict[str, Any]:
         filters.append(
             {
                 "bool": {
-                    "should": [{"term": {"user_id": value}}, {"term": {"actor_id": value}}],
+                    "should": [
+                        {"term": {"user_id": value}},
+                        {
+                            "bool": {
+                                "filter": [
+                                    {"term": {"entity": "user"}},
+                                    {"term": {"entity_id": value}},
+                                ]
+                            }
+                        },
+                    ],
                     "minimum_should_match": 1,
                 }
             }
@@ -90,51 +76,23 @@ def _build_query(query: AuditQuery) -> dict[str, Any]:
             bounds["gte"] = query.date_from.isoformat()
         if query.date_to is not None:
             bounds["lt"] = query.date_to.isoformat()
-        filters.append({"range": {"@timestamp": bounds}})
+        filters.append({"range": {"timestamp": bounds}})
     return {"bool": {"filter": filters}} if filters else {"match_all": {}}
 
 
-def _uuid(value: Any) -> uuid.UUID | None:
-    try:
-        return uuid.UUID(str(value)) if value else None
-    except ValueError:
-        return None
-
-
-def _record(hit: dict[str, Any]) -> AuditRecord:
-    source = hit["_source"]
-    details = source.get("details")
-    return AuditRecord(
-        id=hit["_id"],
-        timestamp=datetime.fromisoformat(source["@timestamp"]),
-        action=source.get("action", ""),
-        actor_id=_uuid(source.get("actor_id")),
-        user_id=_uuid(source.get("user_id")),
-        entity=source.get("entity"),
-        entity_id=source.get("entity_id"),
-        details=details if isinstance(details, dict) else {},
-        correlation_id=source.get("correlation_id"),
-        service=source.get("service"),
-    )
-
-
 class AuditSearchService:
-    def __init__(self, client: AsyncElasticsearch, settings: ElasticSettings) -> None:
+    def __init__(self, client: AsyncElasticsearch) -> None:
         self._client = client
-        self._settings = settings
 
-    async def search(
-        self, query: AuditQuery, page: int, size: int
-    ) -> tuple[list[AuditRecord], int]:
+    async def search(self, query: AuditQuery, page: int, size: int) -> tuple[list[AuditEvent], int]:
         try:
             response = await self._client.search(
-                index=self._settings.audit_index_pattern,
+                index=AUDIT_INDEX_PATTERN,
                 query=_build_query(query),
-                sort=[{"@timestamp": {"order": "desc"}}],
+                sort=[{"timestamp": {"order": "desc"}}],
                 from_=(page - 1) * size,
                 size=size,
                 track_total_hits=True,
-                source_includes=_SOURCE_FIELDS,
                 # No audit index yet (nothing audited so far): an empty result, not an error.
                 ignore_unavailable=True,
                 allow_no_indices=True,
@@ -149,4 +107,5 @@ class AuditSearchService:
             raise ExternalServiceError("Audit search failed") from exc
 
         hits = response["hits"]
-        return [_record(h) for h in hits["hits"]], int(hits["total"]["value"])
+        events = [AuditEvent.model_validate(h["_source"]) for h in hits["hits"]]
+        return events, int(hits["total"]["value"])

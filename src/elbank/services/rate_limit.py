@@ -2,10 +2,10 @@
 
 from redis.asyncio import Redis
 
-from elbank.clients.sms import mask_phone
 from elbank.core.config import LoginRateLimitSettings
 from elbank.core.exceptions import TooManyRequestsError
 from elbank.core.logging import get_logger
+from elbank.core.pii import mask_phone
 
 logger = get_logger(__name__)
 

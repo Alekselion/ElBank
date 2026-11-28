@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 elbank = "elbank.__main__:main"
+elbank-audit-worker = "elbank.workers.audit:main"
 elbank-deposits-worker = "elbank.workers.deposits:main"
 elbank-exports-worker = "elbank.workers.exports:main"
 elbank-notifications-worker = "elbank.workers.notifications:main"

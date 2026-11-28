@@ -16,11 +16,11 @@ import structlog
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from elbank.core.audit import audit
 from elbank.core.config import Settings, get_settings
 from elbank.core.logging import get_logger, setup_logging
 from elbank.db.session import create_engine, create_session_factory
-from elbank.kafka import EventEnvelope, EventType
+from elbank.kafka import EventEnvelope, EventPublisher, EventType, KafkaProducer
+from elbank.services.audit_service import AuditService
 from elbank.services.reconciliation import ReconciliationBuilder, ReconciliationRequest
 from elbank.workers.consumer import EventConsumerWorker, MalformedEventError, create_consumer
 
@@ -29,10 +29,14 @@ logger = get_logger(__name__)
 
 class ReconciliationHandler:
     def __init__(
-        self, session_factory: async_sessionmaker[AsyncSession], builder: ReconciliationBuilder
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        builder: ReconciliationBuilder,
+        audit: AuditService,
     ) -> None:
         self._session_factory = session_factory
         self._builder = builder
+        self._audit = audit
 
     async def __call__(self, envelope: EventEnvelope) -> None:
         try:
@@ -63,20 +67,26 @@ class ReconciliationHandler:
                 status=report.status.value,
                 issues=issues,
             )
-            audit(
+            await self._audit.record(
                 "reconciliation.completed",
-                actor_id=None,
-                user_id=request.requested_by,
+                user_id=None,  # the system
                 entity="reconciliation",
                 entity_id=request.run_id,
-                details={"status": report.status, "issues": issues},
+                payload={
+                    "status": report.status,
+                    "issues": issues,
+                    "requested_by": request.requested_by,
+                },
             )
 
 
 async def run(settings: Settings) -> None:
     engine = create_engine(settings.postgres)
+    kafka = KafkaProducer(settings.kafka)
     handler = ReconciliationHandler(
-        create_session_factory(engine), ReconciliationBuilder(settings.reconciliation)
+        create_session_factory(engine),
+        ReconciliationBuilder(settings.reconciliation),
+        AuditService(EventPublisher(kafka)),
     )
     worker = EventConsumerWorker(
         "reconciliation",
@@ -92,6 +102,7 @@ async def run(settings: Settings) -> None:
     try:
         await worker.run()
     finally:
+        await kafka.stop()
         await engine.dispose()
 
 

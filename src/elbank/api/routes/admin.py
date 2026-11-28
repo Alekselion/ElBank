@@ -1,4 +1,4 @@
-"""Back office: ``/api/v1/admin/*`` (users, tariffs, rates, audit, reconciliation, fraud rules).
+"""Back office: ``/api/v1/admin/*`` (users, tariffs, rates, audit, reconciliation, anti-fraud).
 
 Roles:
 
@@ -8,6 +8,8 @@ POST /users/{id}/block, /unblock                manager (clients only), admin
 POST /users/{id}/role                           admin
 PUT /tariffs, PUT/DELETE /rates/{pair}          admin
 POST/PUT/DELETE /fraud-rules                    admin
+GET /operations/fraud-cases                     manager, admin, auditor
+POST /operations/{id}/confirm, /reject          manager, admin
 GET /audit                                      auditor
 POST /reconciliation/run, GET /reconciliation/* admin, auditor
 =============================================== ==========================
@@ -25,6 +27,7 @@ from elbank.api.deps import (
     AuditorUserDep,
     AuditSearchServiceDep,
     BackOfficeReaderDep,
+    FraudReviewServiceDep,
     FraudRuleServiceDep,
     RatesServiceDep,
     ReconcilerUserDep,
@@ -34,12 +37,14 @@ from elbank.api.deps import (
 )
 from elbank.api.openapi import Responses, error_response
 from elbank.core.exceptions import UnprocessableError
-from elbank.db.models import UserRole, UserStatus
+from elbank.db.models import FraudCase, FraudCaseStatus, Operation, UserRole, UserStatus
 from elbank.schemas.admin import (
     AuditRecordRead,
     BlockUserRequest,
     ChangeRoleRequest,
     EffectiveRateRead,
+    FraudCaseRead,
+    FraudDecisionRequest,
     FraudRuleCreate,
     FraudRuleRead,
     FraudRuleUpdate,
@@ -254,21 +259,7 @@ async def search_audit(
         size,
     )
     return PageRead(
-        items=[
-            AuditRecordRead(
-                id=r.id,
-                timestamp=r.timestamp,
-                action=r.action,
-                actor_id=r.actor_id,
-                user_id=r.user_id,
-                entity=r.entity,
-                entity_id=r.entity_id,
-                details=r.details,
-                correlation_id=r.correlation_id,
-                service=r.service,
-            )
-            for r in records
-        ],
+        items=[AuditRecordRead.model_validate(r.model_dump()) for r in records],
         page=page,
         size=size,
         total=total,
@@ -328,16 +319,19 @@ async def list_fraud_rules(
 @router.post(
     "/fraud-rules",
     status_code=status.HTTP_201_CREATED,
-    summary="Create a rule; the expression is validated (admin)",
-    responses={
-        status.HTTP_409_CONFLICT: error_response("Name already used"),
-        status.HTTP_422_UNPROCESSABLE_CONTENT: error_response("Invalid expression"),
-    },
+    summary="Create a rule; the condition is validated (admin)",
+    responses={status.HTTP_409_CONFLICT: error_response("Name already used")},
 )
 async def create_fraud_rule(
     body: FraudRuleCreate, admin: AdminUserDep, rules: FraudRuleServiceDep
 ) -> FraudRuleRead:
-    rule = await rules.create(admin, body.name, body.expression, enabled=body.enabled)
+    rule = await rules.create(
+        admin,
+        name=body.name,
+        condition=body.condition,
+        description=body.description,
+        enabled=body.enabled,
+    )
     return FraudRuleRead.model_validate(rule)
 
 
@@ -347,13 +341,13 @@ async def create_fraud_rule(
     responses={
         **_RULE_NOT_FOUND,
         status.HTTP_409_CONFLICT: error_response("Name already used"),
-        status.HTTP_422_UNPROCESSABLE_CONTENT: error_response("Invalid expression"),
     },
 )
 async def update_fraud_rule(
     rule_id: uuid.UUID, body: FraudRuleUpdate, admin: AdminUserDep, rules: FraudRuleServiceDep
 ) -> FraudRuleRead:
-    rule = await rules.update(admin, rule_id, body.model_dump(exclude_unset=True))
+    changes = {field: getattr(body, field) for field in body.model_fields_set}
+    rule = await rules.update(admin, rule_id, changes)
     return FraudRuleRead.model_validate(rule)
 
 
@@ -368,3 +362,74 @@ async def delete_fraud_rule(
 ) -> Response:
     await rules.delete(admin, rule_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------- fraud review ----------
+
+_CASE_ERRORS: Responses = {
+    status.HTTP_404_NOT_FOUND: error_response("No anti-fraud case for the operation"),
+    status.HTTP_409_CONFLICT: error_response("Already decided or not held"),
+}
+
+
+def _case(case: FraudCase, operation: Operation) -> FraudCaseRead:
+    return FraudCaseRead(
+        id=case.id,
+        status=case.status,
+        operation_id=operation.id,
+        operation_type=operation.type,
+        operation_status=operation.status,
+        error_code=operation.error_code,
+        amount=operation.amount,
+        currency=operation.currency,
+        user_id=case.user_id,
+        rules=case.rules,
+        ticket_id=case.ticket_id,
+        decided_by_id=case.decided_by_id,
+        decided_at=case.decided_at,
+        decision_reason=case.decision_reason,
+        created_at=case.created_at,
+    )
+
+
+@router.get("/operations/fraud-cases", summary="Held operations, newest first (staff/auditor)")
+async def list_fraud_cases(
+    *,
+    _: BackOfficeReaderDep,
+    review: FraudReviewServiceDep,
+    status_filter: Annotated[FraudCaseStatus | None, Query(alias="status")] = FraudCaseStatus.OPEN,
+    page: PageNumber = 1,
+    size: PageSize = 20,
+) -> PageRead[FraudCaseRead]:
+    items, total = await review.list_cases(status_filter, page, size)
+    return PageRead(items=[_case(c, o) for c, o in items], page=page, size=size, total=total)
+
+
+@router.post(
+    "/operations/{operation_id}/confirm",
+    summary="Release a held operation: it continues (manager/admin)",
+    responses=_CASE_ERRORS,
+)
+async def confirm_operation(
+    operation_id: uuid.UUID,
+    manager: StaffUserDep,
+    review: FraudReviewServiceDep,
+    body: FraudDecisionRequest | None = None,
+) -> FraudCaseRead:
+    result = await review.confirm(manager, operation_id, body.reason if body else None)
+    return _case(result.case, result.operation)
+
+
+@router.post(
+    "/operations/{operation_id}/reject",
+    summary="Reject a held operation: failed, money returned (manager/admin)",
+    responses=_CASE_ERRORS,
+)
+async def reject_operation(
+    operation_id: uuid.UUID,
+    manager: StaffUserDep,
+    review: FraudReviewServiceDep,
+    body: FraudDecisionRequest | None = None,
+) -> FraudCaseRead:
+    result = await review.reject(manager, operation_id, body.reason if body else None)
+    return _case(result.case, result.operation)

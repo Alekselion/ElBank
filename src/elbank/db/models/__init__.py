@@ -7,7 +7,7 @@ for Alembic autogenerate (``alembic/env.py`` imports this package).
 from elbank.db.base import Base
 from elbank.db.models.account import Account, AccountLimit, Card
 from elbank.db.models.admin import RateOverride, Tariff
-from elbank.db.models.audit import AuditEvent, FraudRule
+from elbank.db.models.audit import AuditEvent, FraudCase, FraudRule
 from elbank.db.models.budget import Budget
 from elbank.db.models.enums import (
     AccountStatus,
@@ -17,6 +17,7 @@ from elbank.db.models.enums import (
     CreditStatus,
     Currency,
     DepositStatus,
+    FraudCaseStatus,
     InvestmentOrderStatus,
     InvestmentSide,
     KycStatus,
@@ -62,6 +63,8 @@ __all__ = [
     "Deposit",
     "DepositStatus",
     "FaqArticle",
+    "FraudCase",
+    "FraudCaseStatus",
     "FraudRule",
     "InvestmentOrder",
     "InvestmentOrderStatus",

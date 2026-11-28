@@ -17,12 +17,14 @@ from pydantic import (
 
 from elbank.db.models import (
     Currency,
+    FraudCaseStatus,
     OperationStatus,
     OperationType,
     TariffCode,
     UserRole,
     UserStatus,
 )
+from elbank.services.fraud_service import Condition
 from elbank.services.ledger import percent_of
 from elbank.services.rates import RateSource
 
@@ -148,16 +150,18 @@ class RateOverrideRequest(_Request):
 
 
 class AuditRecordRead(BaseModel):
-    id: str
+    """An ``audit.event`` as stored in Elasticsearch (payload without PII)."""
+
+    event_id: uuid.UUID
     timestamp: datetime
+    user_id: uuid.UUID | None = Field(description="Who acted; null: the system")
     action: str
-    actor_id: uuid.UUID | None = Field(description="Who did it; null: the system")
-    user_id: uuid.UUID | None = Field(description="Whose account/data it concerns")
-    entity: str | None
+    entity: str
     entity_id: str | None
-    details: dict[str, Any]
+    payload: dict[str, Any]
     correlation_id: str | None
-    service: str | None
+    ip: str | None
+    user_agent: str | None
 
 
 # ---------- reconciliation ----------
@@ -211,17 +215,25 @@ class ReconciliationRunRead(BaseModel):
 # ---------- fraud rules ----------
 
 RuleName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-RuleExpression = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=1000),
-    Field(examples=["amount > 300000 and hour < 6"]),
+RuleDescription = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+]
+RuleCondition = Annotated[
+    Condition,
+    Field(
+        description=(
+            'JSON DSL: {"field", "op", "value"}, {"all": [...]}, {"any": [...]}, {"not": {...}}'
+        ),
+        examples=[{"field": "amount", "op": ">", "value": 100000}],
+    ),
 ]
 
 
 class FraudRuleRead(_Read):
     id: uuid.UUID
     name: str
-    expression: str
+    condition: dict[str, Any]
+    description: str | None
     enabled: bool
     created_at: datetime
     updated_at: datetime
@@ -229,21 +241,52 @@ class FraudRuleRead(_Read):
 
 class FraudRuleCreate(_Request):
     name: RuleName
-    expression: RuleExpression
+    condition: RuleCondition
+    description: RuleDescription | None = None
     enabled: bool = True
 
 
 class FraudRuleUpdate(_Request):
-    """Partial update: only sent fields change."""
+    """Partial update: only sent fields change (``description`` may be set to null)."""
 
     name: RuleName | None = None
-    expression: RuleExpression | None = None
+    condition: RuleCondition | None = None
+    description: RuleDescription | None = None
     enabled: bool | None = None
 
     @model_validator(mode="after")
     def _check(self) -> Self:
         if not self.model_fields_set:
             raise ValueError("at least one field must be provided")
-        if any(getattr(self, f) is None for f in self.model_fields_set):
-            raise ValueError("fields cannot be null")
+        nullable = {"description"}
+        if any(getattr(self, f) is None for f in self.model_fields_set - nullable):
+            raise ValueError("only description can be null")
         return self
+
+
+# ---------- fraud review ----------
+
+
+class FraudDecisionRequest(_Request):
+    reason: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+        | None
+    ) = None
+
+
+class FraudCaseRead(BaseModel):
+    id: uuid.UUID
+    status: FraudCaseStatus
+    operation_id: uuid.UUID
+    operation_type: OperationType
+    operation_status: OperationStatus
+    error_code: str | None
+    amount: Decimal
+    currency: str
+    user_id: uuid.UUID
+    rules: list[dict[str, Any]]
+    ticket_id: uuid.UUID | None
+    decided_by_id: uuid.UUID | None
+    decided_at: datetime | None
+    decision_reason: str | None
+    created_at: datetime

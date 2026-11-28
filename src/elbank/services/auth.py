@@ -7,8 +7,6 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from elbank.clients.sms import mask_phone
-from elbank.core.audit import audit
 from elbank.core.config import Settings
 from elbank.core.exceptions import (
     AuthenticationError,
@@ -19,6 +17,7 @@ from elbank.core.exceptions import (
     UserInactiveError,
 )
 from elbank.core.logging import get_logger
+from elbank.core.pii import mask_phone
 from elbank.core.security import (
     InvalidTokenError,
     OtpPurpose,
@@ -31,6 +30,7 @@ from elbank.core.security import (
 )
 from elbank.db.models import RefreshToken, User, UserStatus
 from elbank.kafka import EventPublisher, EventType
+from elbank.services.audit_service import AuditService
 from elbank.services.otp import OtpService
 from elbank.services.rate_limit import LoginRateLimiter
 from elbank.services.sessions import SessionService, TokenPair
@@ -55,6 +55,7 @@ class AuthService:
         self._redis = redis
         self._otp = otp
         self._publisher = publisher
+        self._audit = AuditService(publisher)
         self._settings = settings
         self._login_limiter = LoginRateLimiter(redis, settings.login_rate_limit)
         self._sessions = SessionService(session, redis, settings.jwt)
@@ -106,13 +107,12 @@ class AuthService:
             raise InvalidCredentialsError
         if not verify_password(password, user.password_hash):
             logger.info("login failed: wrong password", user_id=str(user.id))
-            audit(
+            await self._audit.record(
                 "auth.login_failed",
-                actor_id=user.id,
                 user_id=user.id,
                 entity="user",
                 entity_id=user.id,
-                details={"reason": "wrong_password"},
+                payload={"reason": "wrong_password"},
             )
             raise InvalidCredentialsError
         self._ensure_active(user)
@@ -125,7 +125,7 @@ class AuthService:
         pair = self._sessions.issue_pair(user)
         await self._session.commit()
         logger.info("user logged in", user_id=str(user.id))
-        audit("auth.login", actor_id=user.id, user_id=user.id, entity="user", entity_id=user.id)
+        await self._audit.record("auth.login", user_id=user.id, entity="user", entity_id=user.id)
         return pair
 
     async def refresh(self, refresh_token: str) -> TokenPair:

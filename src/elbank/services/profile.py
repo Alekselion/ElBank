@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from elbank.clients.sms import mask_phone
 from elbank.core.config import Settings
 from elbank.core.exceptions import (
     ConflictError,
@@ -19,6 +18,7 @@ from elbank.core.exceptions import (
     UnprocessableError,
 )
 from elbank.core.logging import get_logger
+from elbank.core.pii import mask_phone
 from elbank.core.security import OtpPurpose, hash_password, verify_password
 from elbank.db.models import User, UserStatus
 from elbank.kafka import EventPublisher, EventType

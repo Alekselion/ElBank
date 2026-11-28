@@ -63,7 +63,8 @@ class SupportMessage(UUIDMixin, CreatedAtMixin, Base):
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("support_tickets.id", ondelete="CASCADE")
     )
-    author_id: Mapped[uuid.UUID] = mapped_column(
+    # NULL: an automatic message of the bank (e.g. the anti-fraud notice of a fraud ticket).
+    author_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
     # Written by bank staff (fixed at write time: the author's role may change later).

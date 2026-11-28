@@ -23,6 +23,12 @@ refund, ``transfer.failed``. It also fails transfers stuck in ``processing``
 (the API process died during the call) after ``TRANSFERS_EXTERNAL_STALE_AFTER_SECONDS``.
 A failed debit is refunded by restoring the balance: a failed operation does not
 count in the ledger, so no compensating posting is needed.
+
+Anti-fraud hold: after a successful check the money is debited, but the operation
+stays ``pending`` (``FRAUD_REVIEW``) and the gateway is not called; the gateway request
+is kept in the fraud case (``resume``). Confirmation moves it to ``processing`` and
+continues from step 2 (:meth:`ExternalTransferService.continue_held`); rejection fails
+it with ``FRAUD_REJECTED`` and refunds the money.
 """
 
 import uuid
@@ -30,6 +36,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -48,6 +55,7 @@ from elbank.core.logging import get_logger
 from elbank.db.models import Account, Currency, Operation, OperationStatus, OperationType, User
 from elbank.kafka import EventPublisher, EventType
 from elbank.services.account_cache import AccountListCache
+from elbank.services.fraud_service import FraudService, held
 from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.ledger import OutgoingChecks, TransferErrorCode, lock_accounts
 from elbank.services.operation_service import OperationService
@@ -108,6 +116,7 @@ class ExternalTransferService:
         *,
         interbank: InterbankClient,
         sbp: SbpClient,
+        fraud: FraudService,
         cache: AccountListCache,
         publisher: EventPublisher,
         bank: BankSettings,
@@ -118,6 +127,7 @@ class ExternalTransferService:
         self._checks = checks
         self._interbank = interbank
         self._sbp = sbp
+        self._fraud = fraud
         self._cache = cache
         self._publisher = publisher
         self._bank = bank
@@ -130,16 +140,6 @@ class ExternalTransferService:
         if not is_valid_account_number(request.account_number, request.bic):
             raise UnprocessableError("account_number does not match the BIC (control key)")
 
-        async def call(operation: Operation, source: Account) -> GatewayResult:
-            return await self._interbank.send(
-                transfer_id=operation.id,
-                payer=BankParty(self._bank.bic, source.number, request.user.full_name),
-                payee=BankParty(request.bic, request.account_number, request.recipient_name),
-                amount=operation.amount,
-                currency=operation.currency,
-                purpose=request.description,
-            )
-
         return await self._run(
             user=request.user,
             from_account_id=request.from_account_id,
@@ -148,19 +148,16 @@ class ExternalTransferService:
             counterparty=request.account_number,
             description=request.description,
             idempotency_key=request.idempotency_key,
-            call=call,
+            resume={
+                "payer_name": request.user.full_name,
+                "bic": request.bic,
+                "account_number": request.account_number,
+                "recipient_name": request.recipient_name,
+                "purpose": request.description,
+            },
         )
 
     async def send_sbp(self, request: SbpTransfer) -> TransferResult:
-        async def call(operation: Operation, source: Account) -> GatewayResult:
-            return await self._sbp.send(
-                transfer_id=operation.id,
-                payer_account=source.number,
-                phone=request.phone,
-                amount=operation.amount,
-                purpose=request.description,
-            )
-
         return await self._run(
             user=request.user,
             from_account_id=request.from_account_id,
@@ -169,8 +166,59 @@ class ExternalTransferService:
             counterparty=request.phone,
             description=request.description,
             idempotency_key=request.idempotency_key,
-            call=call,
+            resume={"phone": request.phone, "purpose": request.description},
         )
+
+    # ---------- anti-fraud decisions ----------
+
+    def release_held(self, operation: Operation) -> None:
+        """Confirmed (operation locked by the caller, who commits): ``processing``."""
+        self._ops.mark_processing(operation)
+        operation.error_code = None
+
+    async def continue_held(self, operation: Operation, resume: dict[str, Any]) -> TransferView:
+        """After the confirmation is committed: call the gateway and apply its answer."""
+        source = await self._session.get(Account, operation.account_id)
+        assert source is not None
+        call = self._gateway_call(operation.type, resume)
+        return await self._apply(operation.id, await self._call(call, operation, source))
+
+    async def reject_held(self, operation: Operation) -> tuple[TransferView, list[Account]]:
+        """Rejected (operation locked by the caller, who commits): failed, money returned."""
+        self._ops.mark_failed(operation, TransferErrorCode.FRAUD_REJECTED)
+        return _view(operation), [await _refund(self._session, operation)]
+
+    async def publish_failed(self, view: TransferView) -> None:
+        await self._publish_failed(view.operation)
+
+    def _gateway_call(self, type_: OperationType, resume: dict[str, Any]) -> GatewayCall:
+        """The gateway request of a transfer, built from what ``send_*`` received."""
+        if type_ is OperationType.EXTERNAL_TRANSFER:
+
+            async def interbank(operation: Operation, source: Account) -> GatewayResult:
+                return await self._interbank.send(
+                    transfer_id=operation.id,
+                    payer=BankParty(self._bank.bic, source.number, resume["payer_name"]),
+                    payee=BankParty(
+                        resume["bic"], resume["account_number"], resume["recipient_name"]
+                    ),
+                    amount=operation.amount,
+                    currency=operation.currency,
+                    purpose=resume["purpose"],
+                )
+
+            return interbank
+
+        async def sbp(operation: Operation, source: Account) -> GatewayResult:
+            return await self._sbp.send(
+                transfer_id=operation.id,
+                payer_account=source.number,
+                phone=resume["phone"],
+                amount=operation.amount,
+                purpose=resume["purpose"],
+            )
+
+        return sbp
 
     # ---------- internals ----------
 
@@ -184,7 +232,7 @@ class ExternalTransferService:
         counterparty: str,
         description: str | None,
         idempotency_key: str,
-        call: GatewayCall,
+        resume: dict[str, Any],
     ) -> TransferResult:
         async def replay(existing: Operation) -> TransferResult:
             same = (
@@ -206,10 +254,11 @@ class ExternalTransferService:
                 counterparty=counterparty,
                 description=description,
                 idempotency_key=idempotency_key,
+                resume=resume,
             )
-            if operation.status is OperationStatus.FAILED:
+            if operation.status is OperationStatus.FAILED or held(operation):
                 return TransferResult(_view(operation), created=True)
-            outcome = await self._call(call, operation, source)
+            outcome = await self._call(self._gateway_call(type_, resume), operation, source)
             return TransferResult(await self._apply(operation.id, outcome), created=True)
 
         return await self._guard.run(user.id, idempotency_key, execute=execute, replay=replay)
@@ -224,15 +273,16 @@ class ExternalTransferService:
         counterparty: str,
         description: str | None,
         idempotency_key: str,
+        resume: dict[str, Any],
     ) -> tuple[Operation, Account]:
-        """Tx 1: checks and debit; the operation is ``processing`` (or ``failed``)."""
+        """Tx 1: checks and debit; the operation is ``processing`` (``failed``, or held)."""
         source = (await lock_accounts(self._session, {from_account_id})).get(from_account_id)
         if source is None or source.user_id != user.id:
             raise NotFoundError("Account not found")
         if source.currency != Currency.RUB:
             raise UnprocessableError("External transfers are made from RUB accounts only")
 
-        error = await self._checks.check(source, amount, Decimal(0), operation=type_)
+        error = await self._checks.check(source, amount, Decimal(0))
         operation = self._ops.create_pending(
             account_id=source.id,
             user_id=user.id,
@@ -249,7 +299,14 @@ class ExternalTransferService:
             await self._publish_failed(operation)
             return operation, source
 
+        hits = await self._fraud.evaluate(source, amount, Decimal(0), type_)
         source.balance -= amount
+        if hits:
+            hold = await self._fraud.hold(operation, user, hits, resume)
+            await self._session.commit()
+            await self._cache.invalidate(user.id)
+            await self._fraud.announce(hold)
+            return operation, source
         self._ops.mark_processing(operation)
         await self._session.commit()
         await self._cache.invalidate(user.id)

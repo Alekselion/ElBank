@@ -73,6 +73,7 @@ docker compose ps
 `statement-worker` (консьюмер `statement.requested`), `exports-worker` (консьюмер `export.requested`),
 `operations-worker` (консьюмер `operation.completed`: кэш аналитики и бюджеты), `notifications-worker`
 (консьюмер `notification.send`), `reconciliation-worker` (консьюмер `reconciliation.requested`),
+`audit-worker` (консьюмер `audit.event` → Elasticsearch),
 `deposit-worker` и `transfers-worker` (завершение переводов, разбор таймаутов внешних переводов
 и платежей). Сервис `kibana-setup` создаёт в Kibana data views `elbank-logs-*` и `elbank-audit-*`
 и завершается.
@@ -228,7 +229,8 @@ Redis не ломает `GET /` — ответ берётся из БД.
 
 Если не прошла бизнес-проверка, перевод сохраняется со `status=failed` и `error_code`
 (`ACCOUNT_NOT_ACTIVE`, `RECIPIENT_ACCOUNT_NOT_ACTIVE`, `INSUFFICIENT_FUNDS`, `DAILY_LIMIT_EXCEEDED`,
-`MONTHLY_LIMIT_EXCEEDED`, `FRAUD_SUSPECTED` — сработало правило антифрода), публикуется `transfer.failed`. Ответ — `201`, повторить можно только с
+`MONTHLY_LIMIT_EXCEEDED`), публикуется `transfer.failed`. Сработавшее правило антифрода не отказывает,
+а удерживает перевод на проверку (`pending`, `FRAUD_REVIEW`, см. «Антифрод»). Ответ — `201`, повторить можно только с
 новым ключом. Лимиты считаются по исходящим `transfer_out`/`payment` за текущие сутки/месяц UTC;
 комиссия и отменённые переводы в лимит не входят.
 
@@ -600,9 +602,34 @@ WireMock: `sms_ok.json`, `sms_fail.json` (500 для `+79990000011`), `email_ok.
 - Если Logstash недоступен, приложение работает как обычно: события ждут в памяти
   и досылаются после восстановления (старше 5 минут — отбрасываются).
 - `LOG_JSON=false` включает человекочитаемый вывод в консоль для локальной разработки.
-- Записи аудита (`core/audit.py`, поле `log_type=audit`) Logstash пишет в отдельный индекс
-  `elbank-audit-YYYY.MM.dd` с шаблоном `logstash/templates/elbank-audit.json` (`action`, `actor_id`,
-  `user_id`, `entity`, `entity_id` — keyword, `details` — flattened). Data view «ElBank audit».
+- **PII.** Перед записью любого лога (и в аудите) работает `core/pii.py`: пароли, OTP, токены,
+  PAN, CVV, паспортные данные заменяются на `[REDACTED]` по имени поля; телефоны маскируются
+  (`+7***1234`) и в полях, и внутри текста (в том числе в URL access-лога, `%2B7…`); номера карт
+  в тексте — `**** 1234` (16–19 цифр всегда, 13–15 — при валидном Луне). Доменные события Kafka
+  не маскируются: их потребителям нужны настоящие значения (SMS — номер телефона).
+
+## Сквозной аудит
+
+Аудит — отдельный поток, не логи: Kafka-топик `audit.event` → `audit-worker` → Elasticsearch,
+индекс `elbank-audit-YYYY.MM.DD` (`elasticsearch-py` `AsyncElasticsearch`, транспорт httpx).
+Логи приложения по-прежнему идут в Logstash → `elbank-logs-*`.
+
+- **Поля события:** `event_id`, `user_id` (кто действовал; `null` — система), `action`, `entity`,
+  `entity_id`, `payload` (без PII, `flattened`), `correlation_id`, `ip`, `user_agent`, `timestamp`.
+- **Источники.** `AuditMiddleware` пишет каждый `POST/PUT/PATCH/DELETE` под `/api/`:
+  `action=http.<имя обработчика>` (например `http.create_sbp_transfer`), `entity_id` — метод и шаблон
+  пути (`POST /api/v1/admin/operations/{operation_id}/confirm`), в payload — статус ответа и время.
+  Тела запросов и query string не пишутся. `services/audit_service.py` добавляет доменные события:
+  `auth.login`, `auth.login_failed`, `admin.user.block|unblock|role_change`, `admin.tariffs.update`,
+  `admin.rate.override|override_removed`, `admin.fraud_rule.create|update|delete`,
+  `admin.reconciliation.run`, `reconciliation.completed`, `fraud.operation_held|confirmed|rejected`,
+  `cli.user.role_change`.
+- **Worker.** При старте ставит index template `elbank-audit` (strict mapping) и ждёт Elasticsearch.
+  `_id` документа = `event_id`, поэтому повтор сообщения Kafka не создаёт дубль. Elasticsearch
+  недоступен — воркер падает без коммита offset, после рестарта события дописываются из Kafka.
+- **Kibana.** `kibana-setup` создаёт data views «ElBank logs» (`elbank-logs-*`, время `@timestamp`)
+  и «ElBank audit» (`elbank-audit-*`, время `timestamp`). Вручную: Stack Management → Data Views →
+  Create data view, укажите шаблон индекса и поле времени.
 
 ## Админ-панель
 
@@ -623,6 +650,8 @@ uv run elbank-set-role --phone +79991234567 --role admin
 | `PUT /tariffs`, `PUT`/`DELETE /rates/{pair}`              | admin                                 |
 | `POST /fraud-rules`, `PUT`/`DELETE /fraud-rules/{id}`     | admin                                 |
 | `GET /audit?user_id=&action=&from=&to=&page=&size=`       | auditor                               |
+| `GET /operations/fraud-cases?status=&page=&size=`         | manager, admin, auditor               |
+| `POST /operations/{id}/confirm`, `/reject` (`{reason}`)   | manager, admin                        |
 | `POST /reconciliation/run`, `GET /reconciliation/{run_id}`| admin, auditor                        |
 
 - **Блокировка.** `status=blocked`, отзываются все refresh- и access-токены (пользователь выходит
@@ -637,13 +666,10 @@ uv run elbank-set-role --phone +79991234567 --role admin
   `rates:RUB:USD` удаляются сразу, поэтому `/transfers/rates` и конвертации видят новый курс со
   следующего запроса. `DELETE /rates/{pair}` возвращает курс ЦБ. `GET /rates` — действующие курсы всех
   пар (`source: cbr | override`) и список override.
-- **Аудит.** Читается из Elasticsearch (`elbank-audit-*`), не из БД. `user_id` ищет и по исполнителю,
-  и по субъекту; `action` — точное значение или префикс со `*` (`admin.user.*`); `from`/`to` — ISO 8601
-  с часовым поясом. Пишутся: `auth.login`, `auth.login_failed`, `admin.user.block|unblock|role_change`,
-  `admin.tariffs.update`, `admin.rate.override|override_removed`, `admin.fraud_rule.create|update|delete`,
-  `admin.reconciliation.run`, `reconciliation.completed`, `fraud.operation_blocked`, `cli.user.role_change`.
-  Elasticsearch недоступен — `503`. Аудит доставляется тем же асинхронным каналом, что и логи: при
-  недоступном Logstash дольше 5 минут записи теряются.
+- **Аудит.** Читается из Elasticsearch (`elbank-audit-*`), не из БД (см. «Сквозной аудит»).
+  `user_id` ищет и по исполнителю, и по пользователю, над которым выполнено действие
+  (`entity=user`); `action` — точное значение или префикс со `*` (`admin.user.*`); `from`/`to` —
+  ISO 8601 с часовым поясом. Elasticsearch недоступен — `503`.
 - **Сверка.** `POST /reconciliation/run` `{"date_from": "...Z", "date_to": "...Z"}` (до
   `RECONCILIATION_MAX_PERIOD_DAYS`) агрегирует операции периода (кол-во и сумма по
   тип/статус/валюта), публикует `reconciliation.requested` и отвечает `202` с `run_id` и `report_url`.
@@ -653,13 +679,45 @@ uv run elbank-set-role --phone +79991234567 --role admin
   (`RECONCILIATION_STUCK_AFTER_SECONDS`), отрицательные балансы, а также расхождение итогов с моментом
   запроса (информационно). Отчёт — `/app/uploads/recon/{run_id}.json`, `status: ok | mismatches`;
   `GET /reconciliation/{run_id}` отдаёт его (`404`, пока не готов).
-- **Антифрод.** Правило — выражение над исходящей операцией; если оно истинно, операция сохраняется
-  `failed` с `FRAUD_SUSPECTED`, в аудит пишется `fraud.operation_blocked`. Проверяются внутренние,
-  межбанковские и СБП-переводы и платежи (не конвертации). Переменные: `amount`, `fee`, `balance`,
-  `currency`, `operation`, `hour`, `weekday` (UTC), `account_age_days`, `ops_last_hour`, `spent_today`.
-  Синтаксис: литералы, `and/or/not`, сравнения, `in`, `+ - * /`; вызовы, атрибуты и индексы
-  запрещены (разбор через `ast`, без `eval`). Выражение проверяется при сохранении (`422`).
-  Пример: `amount > 300000 and hour < 6`, `operation == "sbp_transfer" and ops_last_hour >= 5`.
+- **Антифрод.** См. раздел «Антифрод».
+
+## Антифрод
+
+Правило (`fraud_rules.condition`, jsonb) — сравнение или их комбинация:
+
+```json
+{"field": "amount", "op": ">", "value": 100000}
+{"field": "hour", "op": "in", "value": [0, 1, 2, 3, 4]}
+{"all": [{"field": "operation", "op": "==", "value": "sbp_transfer"},
+         {"field": "ops_last_hour", "op": ">=", "value": 5}]}
+```
+
+Комбинаторы: `all`, `any`, `not` (вложенность до 5). Операторы: `== != > >= < <= in not_in`
+(сравнение «больше/меньше» — только для чисел). Поля: `amount`, `fee`, `balance`,
+`account_age_days`, `ops_last_hour`, `spent_today`, `hour`, `weekday` (UTC, 0 — понедельник) —
+числа; `currency`, `operation` (`transfer_out`, `external_transfer`, `sbp_transfer`, `payment`) —
+строки. Условие проверяется при сохранении (`422`). Числа хранятся строками, без потери точности.
+
+Проверяются операции, уводящие деньги от клиента: внутренние, межбанковские и СБП-переводы, платежи
+(конвертации между своими счетами — нет). Если сработало хотя бы одно включённое правило:
+
+1. деньги списываются (резервируются), операция остаётся `pending` с `error_code=FRAUD_REVIEW`;
+   внутренний перевод получателю не зачисляется, шлюз/провайдер не вызывается, клиент не может
+   отменить перевод;
+2. в той же транзакции создаются `fraud_cases` (сработавшие правила, данные для продолжения) и тикет
+   поддержки категории `fraud` с автоматическим сообщением банка (`author_id=null`);
+3. после коммита — Kafka `fraud.suspicious`, `ticket.created`, аудит `fraud.operation_held`.
+
+Решение — `POST /api/v1/admin/operations/{id}/confirm` или `/reject` (`{"reason": "..."}` необязателен):
+
+| Операция            | confirm                                             | reject                                    |
+|---------------------|-----------------------------------------------------|-------------------------------------------|
+| внутренний перевод  | зачисление получателю, завершает `transfers-worker` | все проводки `failed`, возврат `amount + fee` |
+| межбанк / СБП       | `processing` → вызов шлюза, ответ — его результат   | `failed`, возврат, `transfer.failed`      |
+| платёж              | `processing`/`sent` → вызов провайдера              | `failed`, возврат, `payment.failed`       |
+
+Код отказа — `FRAUD_REJECTED`. Тикет получает сообщение сотрудника и статус `resolved`; решение
+пишется в аудит. Очередь — `GET /api/v1/admin/operations/fraud-cases?status=open`.
 
 ## Миграции
 

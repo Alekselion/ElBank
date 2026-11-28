@@ -37,7 +37,6 @@ from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from elbank.core.audit import audit
 from elbank.core.config import ReconciliationSettings
 from elbank.core.exceptions import NotFoundError, UnprocessableError
 from elbank.core.logging import get_logger
@@ -57,6 +56,7 @@ from elbank.schemas.admin import (
     ReconciliationStatus,
     TotalsRow,
 )
+from elbank.services.audit_service import AuditService
 
 logger = get_logger(__name__)
 
@@ -146,13 +146,12 @@ class ReconciliationService:
             request.model_dump(mode="json"),
             key=str(request.run_id),
         )
-        audit(
+        await AuditService(self._publisher).record(
             "admin.reconciliation.run",
-            actor_id=staff.id,
             user_id=staff.id,
             entity="reconciliation",
             entity_id=request.run_id,
-            details={"date_from": date_from, "date_to": date_to, "rows": len(totals)},
+            payload={"date_from": date_from, "date_to": date_to, "rows": len(totals)},
         )
         logger.info("reconciliation requested", run_id=str(request.run_id))
         return ReconciliationRun(request.run_id, date_from, date_to, request.requested_at, totals)
