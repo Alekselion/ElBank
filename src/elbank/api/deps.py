@@ -6,9 +6,12 @@ from typing import Annotated
 
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from elbank.core.config import Settings
 from elbank.core.exceptions import AuthenticationError, PermissionDeniedError, UserInactiveError
-from elbank.core.security import InvalidTokenError, TokenType, decode_token
+from elbank.core.security import InvalidTokenError, TokenPayload, TokenType, decode_token
 from elbank.db.models import User, UserRole, UserStatus
 from elbank.deps import (
     BkiClientDep,
@@ -36,6 +39,7 @@ from elbank.services.credits import CreditService
 from elbank.services.deposits import DepositService
 from elbank.services.exports import ExportJobStore, ExportService
 from elbank.services.external_transfers import ExternalTransferService
+from elbank.services.faq import FaqService
 from elbank.services.idempotency import IdempotencyGuard
 from elbank.services.investments import InvestmentService
 from elbank.services.kyc import KycService
@@ -47,21 +51,18 @@ from elbank.services.profile import ProfileService
 from elbank.services.rates import RatesService
 from elbank.services.sessions import access_revoked_before
 from elbank.services.statements import StatementJobStore, StatementService
+from elbank.services.support import TicketService
 from elbank.services.transfers import TransferService
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /api/v1/auth/login")
 
 
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    session: DbSessionDep,
-    redis: RedisDep,
-    settings: SettingsDep,
-) -> User:
-    if credentials is None:
-        raise AuthenticationError("Missing bearer token")
+async def authenticate_access_token(
+    token: str, session: AsyncSession, redis: Redis, settings: Settings
+) -> tuple[User, TokenPayload]:
+    """Resolve an access token to an active user (shared by HTTP and WebSocket auth)."""
     try:
-        payload = decode_token(credentials.credentials, TokenType.ACCESS, settings.jwt)
+        payload = decode_token(token, TokenType.ACCESS, settings.jwt)
         user_id = uuid.UUID(payload.sub)
     except (InvalidTokenError, ValueError) as exc:
         raise AuthenticationError from exc
@@ -75,6 +76,18 @@ async def get_current_user(
         raise AuthenticationError
     if user.status is not UserStatus.ACTIVE:
         raise UserInactiveError
+    return user, payload
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    session: DbSessionDep,
+    redis: RedisDep,
+    settings: SettingsDep,
+) -> User:
+    if credentials is None:
+        raise AuthenticationError("Missing bearer token")
+    user, _ = await authenticate_access_token(credentials.credentials, session, redis, settings)
     return user
 
 
@@ -398,3 +411,19 @@ def get_budget_service(
 
 
 BudgetServiceDep = Annotated[BudgetService, Depends(get_budget_service)]
+
+
+def get_ticket_service(
+    session: DbSessionDep, publisher: EventPublisherDep, settings: SettingsDep
+) -> TicketService:
+    return TicketService(session, publisher, settings.support)
+
+
+TicketServiceDep = Annotated[TicketService, Depends(get_ticket_service)]
+
+
+def get_faq_service(session: DbSessionDep, redis: RedisDep, settings: SettingsDep) -> FaqService:
+    return FaqService(session, redis, settings.support.faq_cache_ttl_seconds)
+
+
+FaqServiceDep = Annotated[FaqService, Depends(get_faq_service)]

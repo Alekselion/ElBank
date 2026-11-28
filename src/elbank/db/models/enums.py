@@ -157,6 +157,18 @@ class TicketStatus(StrEnum):
     CLOSED = "closed"
 
 
+class TicketCategory(StrEnum):
+    ACCOUNTS = "accounts"
+    CARDS = "cards"
+    TRANSFERS = "transfers"
+    PAYMENTS = "payments"
+    CREDITS = "credits"
+    DEPOSITS = "deposits"
+    INVESTMENTS = "investments"
+    TECHNICAL = "technical"  # app / login problems
+    OTHER = "other"
+
+
 class TicketPriority(StrEnum):
     LOW = "low"
     NORMAL = "normal"

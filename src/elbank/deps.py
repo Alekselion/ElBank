@@ -27,6 +27,7 @@ from elbank.clients import (
 from elbank.core.config import Settings, get_settings
 from elbank.db.session import get_session
 from elbank.kafka import EventPublisher, KafkaProducer
+from elbank.services.ticket_hub import TicketEventHub
 
 
 @dataclass(slots=True, frozen=True)
@@ -36,6 +37,7 @@ class Resources:
     redis: Redis
     kafka: KafkaProducer
     http: httpx.AsyncClient  # WireMock-backed external services
+    ticket_hub: TicketEventHub  # ticket.updated fan-out to WebSockets
 
 
 def get_resources(request: Request) -> Resources:

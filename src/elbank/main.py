@@ -18,6 +18,7 @@ from elbank.db.session import create_engine, create_session_factory
 from elbank.deps import Resources
 from elbank.kafka import EventPublisher, KafkaProducer
 from elbank.services.operation_events import OperationEventRelay, bind_operation_events
+from elbank.services.ticket_hub import TicketEventHub
 
 logger = get_logger(__name__)
 
@@ -39,17 +40,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     session_factory = create_session_factory(engine)
     relay = OperationEventRelay(EventPublisher(kafka))
     bind_operation_events(session_factory, relay)
+    ticket_hub = TicketEventHub(settings.kafka, settings.support.ws_queue_size)
+    ticket_hub.start()
     app.state.resources = Resources(
         engine=engine,
         session_factory=session_factory,
         redis=redis,
         kafka=kafka,
         http=http,
+        ticket_hub=ticket_hub,
     )
     logger.info("application started", version=__version__)
     try:
         yield
     finally:
+        await ticket_hub.stop()
         await relay.drain(_EVENT_DRAIN_SECONDS)
         await kafka.stop()
         await http.aclose()

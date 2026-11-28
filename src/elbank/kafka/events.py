@@ -54,6 +54,8 @@ class EventType(StrEnum):
     DEPOSIT_CLOSED = "deposit.closed"
     DEPOSIT_INTEREST_TICK = "deposit.interest.tick"
     INVESTMENT_ORDER_CREATED = "investment.order.created"
+    TICKET_CREATED = "ticket.created"
+    TICKET_UPDATED = "ticket.updated"
 
 
 class EventEnvelope(BaseModel):

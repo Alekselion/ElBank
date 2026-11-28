@@ -503,6 +503,55 @@ PAN приходит только от процессинга и в БД не п
 `danger` (от 100 %) — каждый уровень один раз за месяц (маркер `budget_alert:{budget_id}:{YYYY-MM}:{level}`
 в Redis; смена лимита сбрасывает маркеры текущего месяца).
 
+## Поддержка
+
+`/api/v1/support/tickets` (клиент видит только свои тикеты — чужие отвечают `404`; manager и admin — все):
+
+| Метод и путь                          | Назначение                                                    |
+|---------------------------------------|---------------------------------------------------------------|
+| `POST /`                              | `multipart/form-data`: `subject`, `category`, `priority` (`normal`), `body`, `attachments` (повторяемый) → тикет + первое сообщение, `ticket.created` |
+| `GET /?status=&limit=&offset=`        | тикеты, свежая активность первой                              |
+| `GET /{id}`                           | тикет с сообщениями и вложениями                              |
+| `GET /{id}/attachments/{attachment_id}` | скачать вложение                                            |
+| `POST /{id}/messages`                 | `{body}` → `ticket.updated`                                   |
+| `POST /{id}/close`                    | закрыть: автор или manager/admin                              |
+| `POST /{id}/rate`                     | `{score 1..5, comment}` — CSAT, один раз, только автор, тикет `resolved`/`closed` |
+| `POST /{id}/status`                   | `{status}` — только manager/admin                             |
+
+Категории: `accounts`, `cards`, `transfers`, `payments`, `credits`, `deposits`, `investments`,
+`technical`, `other`. Вложения: до `SUPPORT_MAX_ATTACHMENTS` файлов по `SUPPORT_MAX_ATTACHMENT_BYTES`,
+тип определяется по содержимому (JPEG, PNG, PDF; иначе `415`), имя файла очищается от пути и
+спецсимволов. Файлы — `{SUPPORT_UPLOADS_DIR}/{attachment_id}`.
+
+Статусы: `open → in_progress | closed`, `in_progress → waiting_client | resolved | closed`,
+`waiting_client → in_progress | resolved | closed`, `resolved → in_progress | closed`; `closed` —
+конечный. Взятие `open` в работу (сменой статуса или первым ответом сотрудника) назначает тикет на
+этого менеджера (`assignee_id`). Ответ клиента в `waiting_client`/`resolved` возвращает тикет в
+`in_progress`. Ответ сотрудника дополнительно отправляет клиенту `notification.send`
+(`template: support.reply`).
+
+`ticket.updated`: `{ticket_id, user_id, status, old_status, assignee_id, kind}` + `message` (`kind:
+message`) или `rating` (`kind: rated`); `kind: status` — смена статуса и закрытие.
+
+### WebSocket
+
+`/ws/tickets/{ticket_id}?token=<access token>` — живые события `ticket.updated` этого тикета (JSON
+как выше + `event_id`, `occurred_at`). Историю загружайте через `GET /{id}`; сообщения клиента в сокет
+игнорируются (годятся как ping). Коды закрытия: `4401` — нет/неверный/отозванный токен или токен
+истёк во время сессии, `4403` — пользователь заблокирован, `4404` — тикета нет или он чужой, `1013` —
+клиент не успевает читать (переподключиться и перезагрузить тикет).
+
+Fan-out: каждый процесс API держит один Kafka-консьюмер `ticket.updated` без consumer group (каждый
+процесс видит все события, с последнего offset) и раскладывает события по `asyncio.Queue`
+подписанных сокетов (`SUPPORT_WS_QUEUE_SIZE`). Без Kafka приложение работает, консьюмер
+переподключается в фоне.
+
+### FAQ
+
+`GET /api/v1/support/faq[?category=]` — опубликованные статьи `FaqArticle`, без авторизации. Весь
+список кэшируется в Redis (`faq:articles`, `SUPPORT_FAQ_CACHE_TTL_SECONDS` = 10 мин). Стартовые
+статьи добавляет миграция `7c2d4e8a9f13`.
+
 ## Логи
 
 Все логи — JSON, по одному объекту на строку. Обязательные поля:

@@ -362,6 +362,18 @@ class BudgetSettings(_Section):
     consumer_group: str = "elbank-operations"
 
 
+class SupportSettings(_Section):
+    model_config = SettingsConfigDict(env_prefix="SUPPORT_")
+
+    # Ticket attachments; /app/uploads/support in docker-compose.
+    uploads_dir: Path = Path("uploads/support")
+    max_attachments: int = Field(default=5, ge=0, le=20)
+    max_attachment_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
+    faq_cache_ttl_seconds: int = Field(default=600, ge=1)
+    # Events buffered per WebSocket; a client that falls behind is disconnected (1013).
+    ws_queue_size: int = Field(default=100, ge=1)
+
+
 class TransferSettings(_Section):
     model_config = SettingsConfigDict(env_prefix="TRANSFERS_")
 
@@ -426,6 +438,7 @@ class Settings(_Section):
     exports: ExportSettings = Field(default_factory=ExportSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     budgets: BudgetSettings = Field(default_factory=BudgetSettings)
+    support: SupportSettings = Field(default_factory=SupportSettings)
     transfers: TransferSettings = Field(default_factory=TransferSettings)
     elastic: ElasticSettings = Field(default_factory=ElasticSettings)
 

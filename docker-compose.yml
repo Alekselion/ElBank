@@ -15,6 +15,7 @@ x-app-env: &app-env
   KYC_UPLOADS_DIR: /app/uploads
   STATEMENTS_DIR: /app/uploads/statements
   EXPORTS_DIR: /app/uploads/exports
+  SUPPORT_UPLOADS_DIR: /app/uploads/support
 
 services:
   # ================================================================ application
@@ -265,6 +266,7 @@ services:
         credit.approved credit.rejected credit.signed credit.closed
         deposit.opened deposit.closed deposit.interest.tick
         investment.order.created
+        ticket.created ticket.updated
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

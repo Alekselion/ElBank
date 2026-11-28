@@ -25,6 +25,7 @@ from elbank.db.models.enums import (
     PaymentOrderStatus,
     PaymentProvider,
     SpendingCategory,
+    TicketCategory,
     TicketPriority,
     TicketStatus,
     UserRole,
@@ -33,7 +34,12 @@ from elbank.db.models.enums import (
 from elbank.db.models.notification import Notification
 from elbank.db.models.operation import Operation, PaymentOrder, TransferTemplate
 from elbank.db.models.product import Credit, Deposit, InvestmentOrder, InvestmentPosition
-from elbank.db.models.support import SupportMessage, SupportTicket
+from elbank.db.models.support import (
+    FaqArticle,
+    SupportAttachment,
+    SupportMessage,
+    SupportTicket,
+)
 from elbank.db.models.user import KycRequest, RefreshToken, User
 
 __all__ = [
@@ -52,6 +58,7 @@ __all__ = [
     "Currency",
     "Deposit",
     "DepositStatus",
+    "FaqArticle",
     "FraudRule",
     "InvestmentOrder",
     "InvestmentOrderStatus",
@@ -69,8 +76,10 @@ __all__ = [
     "PaymentProvider",
     "RefreshToken",
     "SpendingCategory",
+    "SupportAttachment",
     "SupportMessage",
     "SupportTicket",
+    "TicketCategory",
     "TicketPriority",
     "TicketStatus",
     "TransferTemplate",
